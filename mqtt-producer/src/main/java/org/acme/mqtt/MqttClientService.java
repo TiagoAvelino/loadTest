@@ -18,8 +18,26 @@ public class MqttClientService {
     @ConfigProperty(name = "quarkus.openshift.env.vars.service")
     private String broker;
 
-    @PostConstruct
-    public void init() {
+    // @PostConstruct
+    // public void init() {
+    // try {
+
+    // client = new MqttClient(broker, MqttClient.generateClientId());
+    // MqttConnectOptions options = new MqttConnectOptions();
+    // options.setCleanSession(true);
+    // client.connect(options);
+    // System.out.println("Connected to MQTT broker");
+
+    // // client.subscribe("test/topic", (topic, message) -> {
+    // // System.out.println("Received message: " + new
+    // String(message.getPayload()));
+    // // });
+    // } catch (MqttException e) {
+    // e.printStackTrace();
+    // }
+    // }
+
+    public void publishMessage(String topic, MqttSendMessage payload) {
         try {
 
             client = new MqttClient(broker, MqttClient.generateClientId());
@@ -27,21 +45,12 @@ public class MqttClientService {
             options.setCleanSession(true);
             client.connect(options);
             System.out.println("Connected to MQTT broker");
-
-            // client.subscribe("test/topic", (topic, message) -> {
-            // System.out.println("Received message: " + new String(message.getPayload()));
-            // });
-        } catch (MqttException e) {
-            e.printStackTrace();
-        }
-    }
-
-    public void publishMessage(String topic, MqttSendMessage payload) {
-        try {
-
             MqttMessage message = new MqttMessage(payload.serialize());
             message.setQos(1);
             client.publish(topic, message);
+            client.disconnect();
+
+            client.close();
         } catch (MqttException e) {
             e.printStackTrace();
         }
