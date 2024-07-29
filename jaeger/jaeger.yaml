@@ -1,0 +1,35 @@
+apiVersion: jaegertracing.io/v1
+kind: Jaeger
+metadata:
+  name: jaeger-production
+  namespace: tracing-system
+spec:
+  strategy: production
+  sampling:
+    options:
+      default_strategy:
+        param: 1
+        type: probabilistic
+      service_strategies:
+        - operation_strategies:
+            - operation: /produce
+              param: 0
+              type: probabilistic
+            - operation: produce
+              param: 0
+              type: probabilistic
+          param: 1
+          type: probabilistic
+    ingress:
+    security: oauth-proxy
+  storage:
+    type: elasticsearch
+    elasticsearch:
+      nodeCount: 3
+      redundancyPolicy: SingleRedundancy
+    esIndexCleaner:
+      enabled: true
+      numberOfDays: 7
+      schedule: 55 23 * * *
+    esRollover:
+      schedule: '*/30 * * * *'
