@@ -51,12 +51,19 @@ public class MqttConsumerService {
                 Span messageSpan = tracer.spanBuilder("Consume-Message")
                         .startSpan();
                 try (Scope messageScope = messageSpan.makeCurrent()) {
-                    MqttSendMessage receivedMessage = deserialize(message.getPayload());
-                    getHostIp(receivedMessage);
-                    processMessage(receivedMessage);
+                    if (topic.endsWith("/push")) {
+                        LOGGER.info("Recebido no topico push");
+                        LOGGER.info(topic);
 
-                    KafkaSend producer = new KafkaSend();
-                    producer.sendMessage(receivedMessage, transformKey(topic), transformTopic(topic));
+                    } else {
+                        MqttSendMessage receivedMessage = deserialize(message.getPayload());
+                        receivedMessage = getHostIp(receivedMessage);
+                        processMessage(receivedMessage);
+
+                        KafkaSend producer = new KafkaSend();
+                        producer.sendMessage(receivedMessage, transformKey(topic), transformTopic(topic));
+
+                    }
 
                 } finally {
                     messageSpan.end();

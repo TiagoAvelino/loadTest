@@ -23,17 +23,19 @@ public class KafkaSend {
     @Inject
     Tracer tracer;
 
-    @Inject
     @ConfigProperty(name = "kafka.bootstrap.server")
-    private String BOOTSTRAP_SERVERS;
+    private String BOOTSTRAP_SERVERS = "my-cluster-kafka-bootstrap:9092";
 
     public void sendMessage(MqttSendMessage message, String key, String topic) {
         tracer = GlobalOpenTelemetry.getTracer("cons-mqtt-produce-kafka", "1.0");
 
         Span span = createSpan(key, topic);
+        System.out.println(BOOTSTRAP_SERVERS);
 
         try (Producer<String, MqttSendMessage> producer = createKafkaProducer()) {
+
             sendRecord(producer, message, key, topic, span);
+
         } catch (Exception e) {
             System.err.println("Exception occurred: " + e.getMessage());
         } finally {

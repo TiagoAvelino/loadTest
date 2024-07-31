@@ -36,7 +36,7 @@ public class MqttProducer {
         Span span = tracer.spanBuilder("Producer-Message-Mqtt")
                 .setSpanKind(SpanKind.PRODUCER).setAttribute("topic", topic)
                 .startSpan();
-        System.out.printf("Enviando mensagens para o topico: %s e host: %s" + topic,
+        System.out.printf("Enviando mensagens para o topico: %s e host: %s", topic,
                 MQTT_BROKER + mqttMes.getHost() + ":1883");
         System.out.println("Enviando mensagens: " + mqttMes.getMessage());
 
@@ -46,7 +46,6 @@ public class MqttProducer {
                 MqttClient mqttClient = new MqttClient(MQTT_BROKER + mqttMes.getHost() + ":1883",
                         MqttClient.generateClientId());
                 mqttClient.connect();
-                System.out.println("Enviando mensagens: " + mqttMes.getMessage() + "para o topico" + topic);
 
                 MqttMessage mqttMessage = new MqttMessage();
                 mqttMessage.setPayload(mqttMes.serialize());

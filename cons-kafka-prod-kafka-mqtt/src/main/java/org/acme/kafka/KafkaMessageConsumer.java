@@ -79,7 +79,6 @@ public class KafkaMessageConsumer {
                         MqttSendMessage messageMqtt = new MqttSendMessage();
                         if (record.value().equals(null)) {
                             record.value().setMessage("Message Nula");
-                            System.out.println("Enviando para o kafka com message: " + record.value().getMessage());
 
                         } else {
                             messageMqtt = record.value();
@@ -89,18 +88,16 @@ public class KafkaMessageConsumer {
 
                             messageMqtt.setMessage(messageMqtt.getMessage() + "Mensagem consumida");
 
-                            System.out.println("Message com push: " + messageMqtt.getMessage());
+                            System.out.printf("Message com push: %s e host: %s ", messageMqtt.getMessage(),
+                                    messageMqtt.getHost());
 
                             MqttProducer mqtt = new MqttProducer();
-                            // // mqtt.setTopic(transformTopic(record.key(), topic));
-                            mqtt.setTopic(topic);
-
+                            mqtt.setTopic(transformTopic(record.key(), topic));
                             mqtt.Produce(messageMqtt);
                         } else {
 
                             messageMqtt.setMessage(messageMqtt.getMessage() + "- Mensagem consumida");
-                            // System.out.println("Enviando para o kafka com push: " +
-                            // message.getMessage());
+                            System.out.println("Enviando para o kafka" + messageMqtt.getHost());
                             new KafkaSend().sendMessage(messageMqtt, record.key(), topic + ".push");
 
                         }
@@ -120,17 +117,11 @@ public class KafkaMessageConsumer {
         consumer.close();
     }
 
-    // public static String transformTopic(String first, String second) {
-    // String combined = first + "/" + second;
+    public static String transformTopic(String first, String second) {
+        String combined = first + "/" + second;
 
-    // combined = combined.replace('.', '/');
-
-    // int lastSlashIndex = combined.lastIndexOf('/');
-    // if (lastSlashIndex != -1) {
-    // combined = combined.substring(0, lastSlashIndex);
-    // }
-
-    // return combined;
-    // }
+        combined = combined.replace('.', '/');
+        return combined;
+    }
 
 }

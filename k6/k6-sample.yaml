@@ -4,8 +4,8 @@ metadata:
   name: k6-sample
   namespace: k6-operator-system
 spec:
-  parallelism: 4
+  parallelism: 6
   script:
     configMap:
       file: load-test.js
-      name: my-test
+      name: k6-api-test

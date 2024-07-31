@@ -34,17 +34,21 @@ public class ReadKafkaTopics {
     }
 
     public void onStart(@Observes StartupEvent ev) {
-        System.out.println("Started");
+        // System.out.println("Started");
 
-        System.out.println(BOOTSTRAP_SERVERS);
+        // System.out.println(BOOTSTRAP_SERVERS);
 
-        topics = consumer.listTopics().keySet().stream().collect(Collectors.toCollection(ArrayList::new));
-        for (String topic : topics) {
-            if (!topic.contains("_")) {
-                new KafkaMessageConsumer(topic);
-            }
-        }
-        getTopics();
+        // topics =
+        // consumer.listTopics().keySet().stream().collect(Collectors.toCollection(ArrayList::new));
+        // for (String topic : topics) {
+        // if (!topic.contains("_")) {
+        // new KafkaMessageConsumer(topic);
+        // }
+        // }
+        // getTopics();
+
+        new KafkaMessageConsumer("app.test");
+        new KafkaMessageConsumer("app.test.push");
     }
 
     private void getTopics() {

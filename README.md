@@ -159,12 +159,18 @@ To test the application is necessary to send a post to the endpoint mqtt/send. A
 curl -X POST -d "Hello from Quarkus client" http://localhost:8082/mqtt/send
 ```
 
-For deploying thouse applications in openshift is necessary to config the tag quarkus.openshift.deploy=true in application.properties and select your project and after that just build the application.
+For deploying thouse applications in openshift is necessary to config the tag quarkus.openshift.deploy=true in application.properties and select your project and after that just build the application. For mqtt-server is necessary to edit the service and add the mqtt port to accept the connection to the server.
 
 ```
 oc project <<my-project>>
 cd mqtt-server
 quarkus build
+
+service:
+    - name: mqtt
+      protocol: TCP
+      port: 1883
+      targetPort: 1883
 ```
 
 For producer application:
