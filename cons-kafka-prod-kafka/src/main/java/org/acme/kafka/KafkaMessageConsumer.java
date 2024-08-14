@@ -8,7 +8,6 @@ import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import org.acme.mqtt.MqttProducer;
 import org.acme.mqtt.MqttSendMessage;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -84,23 +83,11 @@ public class KafkaMessageConsumer {
                             messageMqtt = record.value();
 
                         }
-                        if (topic.endsWith(".push")) {
 
-                            messageMqtt.setMessage(messageMqtt.getMessage() + "Mensagem consumida");
-
-                            System.out.printf("Message com push: %s e host: %s ", messageMqtt.getMessage(),
-                                    messageMqtt.getHost());
-
-                            MqttProducer mqtt = new MqttProducer();
-                            mqtt.setTopic(transformTopic(record.key(), topic));
-                            mqtt.Produce(messageMqtt);
-                        } else {
-
-                            messageMqtt.setMessage(messageMqtt.getMessage() + "- Mensagem consumida");
-                            System.out.println("Enviando para o kafka" + messageMqtt.getHost());
-                            new KafkaSend().sendMessage(messageMqtt, record.key(), topic + ".push");
-
-                        }
+                        messageMqtt.setMessage(messageMqtt.getMessage() + "- Mensagem consumida");
+                        System.out.println(
+                                "Enviando para o kafka" + messageMqtt.getMessage() + "no topico" + topic + ".push");
+                        new KafkaSend().sendMessage(messageMqtt, record.key(), topic + ".push");
 
                         // Process the received message here
                         // System.out.println("Received message: " + message.getMessage());

@@ -243,3 +243,35 @@ Despite using simpler approaches and spending a lot of time deploying metrics to
 [Red Hat AMQ Streams Assembly Metrics](https://access.redhat.com/documentation/pt-br/red_hat_amq/7.7/html-single/deploying_and_upgrading_amq_streams_on_openshift/index#assembly-metrics-str)
 
 [Running Distributed Tests on Kubernetes with K6](https://k6.io/blog/running-distributed-tests-on-k8s/)
+
+https://docs.openshift.com/container-platform/4.16/nodes/cma/nodes-cma-autoscaling-custom-trigger.html
+
+Configuring the custom metrics autoscaler to use OpenShift Container Platform monitoring
+
+You must perform the following tasks, as described in this section:
+
+Create a service account.
+
+oc create serviceaccount thanos
+
+Create a secret that generates a token for the service account.
+
+$ oc create -f secret-token.yaml
+
+$ oc describe serviceaccount thanos
+
+Create the trigger authentication.
+
+$ oc create -f custom-metrics-autoscaler/trigger-auth.yaml
+
+Create a role.
+
+$ oc create -f custom-metrics-autoscaler/role.yaml
+
+$ oc create -f custom-metrics-autoscaler/role-binding.yaml
+
+Add that role to the service account.
+
+Reference the token in the trigger authentication object used by Prometheus.
+
+falta verificar mecanismo de authenticação não está correto**_++++_**+++**+**+_+_+**+_+_+_+_+\_+**+_+_+_+_+_+_+\_+

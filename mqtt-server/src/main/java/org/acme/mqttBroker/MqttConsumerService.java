@@ -51,6 +51,8 @@ public class MqttConsumerService {
                 Span messageSpan = tracer.spanBuilder("Consume-Message")
                         .startSpan();
                 try (Scope messageScope = messageSpan.makeCurrent()) {
+                    LOGGER.info("Recebido no topico:" + topic);
+
                     if (topic.endsWith("/push")) {
                         LOGGER.info("Recebido no topico push");
                         LOGGER.info(topic);

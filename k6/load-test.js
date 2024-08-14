@@ -22,7 +22,7 @@ export default function () {
         "jwt": "teste"
      });
     const headers = { 'Content-Type': 'application/json','Accept':'*/*' };
-    const res = http.post('http://mqtt-producer-mqtt.apps.cluster-dzmxp.dzmxp.sandbox920.opentlc.com/mqtt/send?topic=mqtt-message-in/1/2/app/test', payload, { headers });
+    const res = http.post('http://mqtt-producer-mqtt.apps.cluster-ptpbn.sandbox133.opentlc.com/mqtt/send?topic=mqtt-message-in/1/2/app/test', payload, { headers });
 
     check(res, {
         'Post status is 200': (r) => res.status === 200

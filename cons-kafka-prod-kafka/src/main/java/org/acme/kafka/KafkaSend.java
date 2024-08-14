@@ -55,7 +55,7 @@ public class KafkaSend {
                     if (exception != null) {
                         System.err.println("Error sending message: " + exception.getMessage());
                     } else {
-                        // Add any additional processing here
+                        System.err.println("Mensagem enviada para o .push");
                     }
                 });
             } finally {

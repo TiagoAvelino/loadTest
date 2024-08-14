@@ -48,7 +48,6 @@ public class ReadKafkaTopics {
         // getTopics();
 
         new KafkaMessageConsumer("app.test");
-        new KafkaMessageConsumer("app.test.push");
     }
 
     private void getTopics() {
