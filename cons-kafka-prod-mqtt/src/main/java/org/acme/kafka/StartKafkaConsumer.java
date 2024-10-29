@@ -1,11 +1,11 @@
-package org.acme.kafka;
+// package org.acme.kafka;
 
-import io.quarkus.runtime.StartupEvent;
-import jakarta.enterprise.event.Observes;
+// import io.quarkus.runtime.StartupEvent;
+// import jakarta.enterprise.event.Observes;
 
-public class StartKafkaConsumer {
+// public class StartKafkaConsumer {
 
-    public void onStart(@Observes StartupEvent ev) {
-        new KafkaMessageConsumer("app.test.push");
-    }
-}
+// public void onStart(@Observes StartupEvent ev) {
+// new KafkaMessageConsumer("app.test.push");
+// }
+// }

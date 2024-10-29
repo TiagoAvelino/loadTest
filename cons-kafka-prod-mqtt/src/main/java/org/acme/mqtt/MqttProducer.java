@@ -57,13 +57,23 @@ public class MqttProducer {
             e.printStackTrace();
         } finally {
             try {
+                System.out.println("MQTTCLIENT is connected E MQTT CLIENT CONNECTADO");
                 if (mqttClient != null && mqttClient.isConnected()) {
+                    System.out.println("MQTTCLIENT NULL E MQTT CLIENT CONNECTADO");
+
                     mqttClient.disconnect();
+                    System.out.println("MQTTCLIENT NULL E MQTT CLIENT CONNECTADO");
+
                 }
                 if (mqttClient != null) {
+                    System.out.println("MQTTCLIENT NULL");
+
                     mqttClient.close();
+                    System.out.println("MQTTCLIENT NULL");
+
                 }
             } catch (MqttException e) {
+                System.out.println("TRATATIVA MQTT TRAVADO");
                 e.printStackTrace();
             }
         }

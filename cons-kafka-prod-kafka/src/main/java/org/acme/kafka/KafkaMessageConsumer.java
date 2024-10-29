@@ -32,7 +32,7 @@ public class KafkaMessageConsumer {
     private final KafkaConsumer<String, MqttSendMessage> consumer;
 
     @ConfigProperty(name = "kafka.bootstrap.server")
-    private String BOOTSTRAP_SERVERS = "my-cluster-kafka-bootstrap:9092";
+    private String BOOTSTRAP_SERVERS = "my-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092";
     Map<String, List<PartitionInfo>> topics;
     private String topic = "";
 

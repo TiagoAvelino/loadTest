@@ -146,17 +146,27 @@ cd mqtt-producer
 quarkus dev
 ```
 
-For run cons-kafka-prod-kafka-mqtt.
+For run cons-kafka-prod-mqtt.
 
 ```
-cd cons-kafka-prod-kafka-mqtt
+cd cons-kafka-prod-kafka
+quarkus dev
+```
+
+For run cons-kafka-prod-mqtt.
+
+```
+cd cons-kafka-prod-kafka
 quarkus dev
 ```
 
 To test the application is necessary to send a post to the endpoint mqtt/send. After that you can follow the logs of the consumer application.
 
 ```
-curl -X POST -d "Hello from Quarkus client" http://localhost:8082/mqtt/send
+curl -X POST 'http://mqtt-producer-camel-quarkus-apps.apps.tiago-cluster.sandbox1393.opentlc.com/mqtt/send?topic=mqtt-message-in/1/2/app/test' \
+-H 'Content-Type: application/json' \
+-H 'Accept: */*' \
+-d '{"message": "teste1", "jwt": "teste"}'
 ```
 
 For deploying thouse applications in openshift is necessary to config the tag quarkus.openshift.deploy=true in application.properties and select your project and after that just build the application. For mqtt-server is necessary to edit the service and add the mqtt port to accept the connection to the server.
@@ -183,7 +193,13 @@ quarkus build
 
 ```
 oc project <<my-project>>
-cd cons-kafka-prod-kafka-mqtt
+cd cons-kafka-prod-kafka
+quarkus build
+```
+
+```
+oc project <<my-project>>
+cd cons-kafka-prod-mqtt
 quarkus build
 ```
 

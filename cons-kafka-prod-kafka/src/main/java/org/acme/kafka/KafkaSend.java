@@ -25,7 +25,7 @@ public class KafkaSend {
 
     @Inject
     @ConfigProperty(name = "kafka.bootstrap.server")
-    private String BOOTSTRAP_SERVERS = "my-cluster-kafka-bootstrap:9092";
+    private String BOOTSTRAP_SERVERS = "my-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092";
 
     public void sendMessage(MqttSendMessage message, String key, String topic) {
         tracer = GlobalOpenTelemetry.getTracer("mqtt-kafka", "1.0");

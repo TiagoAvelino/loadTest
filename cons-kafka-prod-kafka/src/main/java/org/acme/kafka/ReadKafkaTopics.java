@@ -18,7 +18,7 @@ import jakarta.enterprise.event.Observes;
 public class ReadKafkaTopics {
 
     @ConfigProperty(name = "kafka.bootstrap.server")
-    private String BOOTSTRAP_SERVERS = "my-cluster-kafka-bootstrap:9092";
+    private String BOOTSTRAP_SERVERS = "my-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092";
     private final KafkaConsumer<String, String> consumer;
     List<String> topics = new ArrayList<>();
 
