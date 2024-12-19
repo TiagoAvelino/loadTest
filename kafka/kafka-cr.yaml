@@ -10,7 +10,7 @@ spec:
   kafka:
     config:
       default.replication.factor: 3
-      inter.broker.protocol.version: '3.6'
+      inter.broker.protocol.version: '3.8'
       min.insync.replicas: 2
       offsets.topic.replication.factor: 3
       transaction.state.log.min.isr: 2
@@ -44,7 +44,7 @@ spec:
       deleteClaim: true
       size: 10Gi
       type: persistent-claim
-    version: 3.6.0
+    version: 3.8.0
   kafkaExporter:
     groupRegex: ".*"
     topicRegex: ".*"
@@ -59,4 +59,4 @@ spec:
     storage:
       class: gp3-csi
       size: 5Gi
-      type: persistent-claim
+      type: persistent-claim  

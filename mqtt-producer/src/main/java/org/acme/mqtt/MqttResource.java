@@ -20,6 +20,8 @@ public class MqttResource {
     public Response sendMessage(MqttSendMessage mqttMes, @QueryParam("topic") String topic) {
         System.out.println("Entrando no metodo de envio mqtt");
         mqttClientService.publishMessage(topic, mqttMes);
+        System.out.println("TOPICO: " + topic);
+
         return Response.ok().build();
     }
 

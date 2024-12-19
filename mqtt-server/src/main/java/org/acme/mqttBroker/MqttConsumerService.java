@@ -15,13 +15,12 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.jboss.logging.Logger;
 
-import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Scope;
+import io.quarkus.runtime.StartupEvent;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 
 @RegisterForReflection
@@ -33,82 +32,79 @@ public class MqttConsumerService {
     @Inject
     Tracer tracer;
 
+    @Inject
+    KafkaSend producer;
+
     private IMqttClient client;
 
     @Inject
     ManagedExecutor managedExecutor;
 
+    public void onStart(@Observes StartupEvent ev) {
+        LOGGER.info("Starting MQTT Consumer Service...");
+        init();
+    }
+
     public void init() {
-        tracer = GlobalOpenTelemetry.getTracer("cons-mqtt-produce-kafka", "1.0");
-        Span initSpan = tracer.spanBuilder("Consumer-Mqtt-Init").startSpan();
-        try (Scope scope = initSpan.makeCurrent()) {
+        try {
             client = new MqttClient("tcp://localhost:1883", "1");
             MqttConnectOptions options = new MqttConnectOptions();
             options.setCleanSession(true);
+
             client.connect(options);
             LOGGER.info("Connected to MQTT broker for consuming");
+
             client.subscribe("#", (topic, message) -> {
-                Span messageSpan = tracer.spanBuilder("Consume-Message")
-                        .startSpan();
-                try (Scope messageScope = messageSpan.makeCurrent()) {
-                    LOGGER.info("Recebido no topico:" + topic);
+                try {
+                    LOGGER.info("Received message on topic: " + topic);
 
                     if (topic.endsWith("/push")) {
-                        LOGGER.info("Recebido no topico push");
-                        LOGGER.info(topic);
-
+                        LOGGER.info("Message received on push topic: " + topic);
                     } else {
                         MqttSendMessage receivedMessage = deserialize(message.getPayload());
                         receivedMessage = getHostIp(receivedMessage);
                         processMessage(receivedMessage);
+                        LOGGER.info("TOPIC MQTT: " + topic);
 
-                        KafkaSend producer = new KafkaSend();
-                        producer.sendMessage(receivedMessage, transformKey(topic), transformTopic(topic));
+                        String transformedKey = transformKey(topic);
+                        String transformedTopic = transformTopic(topic);
 
+                        LOGGER.info("Transformed Key: " + transformedKey);
+                        LOGGER.info("Transformed Topic: " + transformedTopic);
+                        producer.sendMessage(receivedMessage, transformedKey, transformedTopic);
                     }
-
-                } finally {
-                    messageSpan.end();
+                } catch (Exception e) {
+                    LOGGER.error("Error processing message from topic: " + topic, e);
                 }
             });
         } catch (MqttException e) {
-            LOGGER.error("Failed to connect to MQTT broker for consuming", e);
-        } finally {
-            initSpan.end();
+            LOGGER.error("Failed to connect or subscribe to MQTT broker", e);
         }
     }
 
     private void processMessage(MqttSendMessage message) {
-        // Add logic to process the received message
-        LOGGER.info("Processing message in firs-consumer: " + message.getMessage());
-        LOGGER.info("Processing message in firs-consumer: " + message.getHost());
-
+        LOGGER.info("Processing message in first-consumer: " + message.getMessage());
+        LOGGER.info("Processing message in first-consumer: " + message.getHost());
     }
 
     private MqttSendMessage getHostIp(MqttSendMessage message) {
         try {
-            LOGGER.info("GetHostIp:");
             InetAddress inetAddress = InetAddress.getLocalHost();
             message.setHost(inetAddress.getHostAddress());
             return message;
         } catch (UnknownHostException e) {
+            LOGGER.warn("Failed to retrieve host IP", e);
             return message;
         }
     }
-
-    // void onStart(@Observes StartupEvent ev) {
-    // System.out.println("Connecting to MQTT broker: ");
-
-    // init();
-    // }
 
     private MqttSendMessage deserialize(byte[] data) {
         try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(data);
                 ObjectInputStream objectInputStream = new ObjectInputStream(byteArrayInputStream)) {
             return (MqttSendMessage) objectInputStream.readObject();
         } catch (IOException | ClassNotFoundException e) {
-            e.printStackTrace();
-            return null; // Handle error gracefully
+            LOGGER.error("Failed to deserialize message payload", e);
+            return null;
         }
     }
 
@@ -125,23 +121,29 @@ public class MqttConsumerService {
         }
     }
 
-    public String transformTopic(String topic) {
-        // Split the topic string by '/'
-        String[] parts = topic.split("/");
+    public static String transformKey(String mqttTopic) {
+        if (mqttTopic == null || mqttTopic.split("/").length < 4) {
+            throw new IllegalArgumentException("Invalid input format: The string must have at least 3 '/' characters.");
+        }
 
-        // Join the last two parts with a dot
-        return parts[parts.length - 2] + "." + parts[parts.length - 1];
+        // Split the topic into parts
+        String[] parts = mqttTopic.split("/", 4); // At most 4 parts
+
+        // Join the first three parts and replace "/" with "."
+        String beforeThirdSlash = String.join("/", parts[0], parts[1], parts[2]);
+        return beforeThirdSlash.replace("/", ".");
     }
 
-    public String transformKey(String topic) {
-        // Find the index of the third occurrence of "/"
-        int thirdSlashIndex = topic.indexOf('/', topic.indexOf('/') + 1);
-        thirdSlashIndex = topic.indexOf('/', thirdSlashIndex + 1);
+    public static String transformTopic(String mqttTopic) {
+        if (mqttTopic == null || mqttTopic.split("/").length < 4) {
+            throw new IllegalArgumentException("Invalid input format: The string must have at least 3 '/' characters.");
+        }
 
-        // Extract the substring up to the third occurrence of "/"
-        String firstThreeParts = topic.substring(0, thirdSlashIndex);
+        // Split the topic into parts
+        String[] parts = mqttTopic.split("/", 4); // At most 4 parts
 
-        // Replace remaining "/" with "."
-        return firstThreeParts.replace('/', '.');
+        // Get the part after the third slash and replace "/" with "."
+        String afterThirdSlash = parts[3];
+        return afterThirdSlash.replace("/", ".");
     }
 }

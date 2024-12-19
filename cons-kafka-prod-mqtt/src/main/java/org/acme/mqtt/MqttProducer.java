@@ -1,15 +1,17 @@
 package org.acme.mqtt;
 
-import org.eclipse.paho.client.mqttv3.MqttClient;
-import org.eclipse.paho.client.mqttv3.MqttException;
-import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.acme.health.IpHealthChecker;
+
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Scope;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.MqttException;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
 
 @ApplicationScoped
 public class MqttProducer {
@@ -20,6 +22,8 @@ public class MqttProducer {
 
     @Inject
     Tracer tracer;
+
+    private final IpHealthChecker ipHealthChecker = new IpHealthChecker();
 
     public String getTopic() {
         return this.topic;
@@ -35,49 +39,40 @@ public class MqttProducer {
         Span span = tracer.spanBuilder("Producer-Message-Mqtt")
                 .setSpanKind(SpanKind.PRODUCER).setAttribute("topic", topic)
                 .startSpan();
-        System.out.printf("Enviando mensagens para o topico: %s e host: %s%n", topic,
+
+        System.out.printf("Preparing to send message to topic: %s and host: %s%n", topic,
                 MQTT_BROKER_PREFIX + mqttMes.getHost() + ":1883");
-        System.out.println("Enviando mensagens: " + mqttMes.getMessage());
 
-        MqttClient mqttClient = null;
         try {
+            // Validate IP and health status before proceeding
+            // if (!ipHealthChecker.isIpReachableAndHealthy(mqttMes.getHost())) {
+            // System.err.printf("IP address %s or its health endpoint is not reachable.
+            // Skipping message.%n",
+            // mqttMes.getHost());
+            // return;
+            // }
 
-            mqttClient = new MqttClient(MQTT_BROKER_PREFIX + mqttMes.getHost() + ":1883",
+            MqttClient mqttClient = new MqttClient(MQTT_BROKER_PREFIX + mqttMes.getHost() + ":1883",
                     MqttClient.generateClientId());
+            MqttConnectOptions connectOptions = new MqttConnectOptions();
+            connectOptions.setConnectionTimeout(10); // Set timeout to 10 seconds
+            connectOptions.setKeepAliveInterval(60); // Optional: Set keep-alive interval
+
             mqttClient.connect();
-            System.out.printf("Enviando mensagens de retorno");
+            System.out.println("Connected to MQTT broker.");
 
             MqttMessage mqttMessage = new MqttMessage();
             mqttMessage.setPayload(mqttMes.serialize());
 
             mqttClient.publish(topic, mqttMessage);
+            System.out.println("Message published successfully.");
 
+            mqttClient.disconnect();
+            System.out.println("Disconnected from MQTT broker.");
         } catch (MqttException e) {
-            System.out.println("Failed to publish message to MQTT broker" + e.getMessage());
-            e.printStackTrace();
+            System.err.printf("Failed to publish message to MQTT broker: %s%n", e.getMessage());
         } finally {
-            try {
-                System.out.println("MQTTCLIENT is connected E MQTT CLIENT CONNECTADO");
-                if (mqttClient != null && mqttClient.isConnected()) {
-                    System.out.println("MQTTCLIENT NULL E MQTT CLIENT CONNECTADO");
-
-                    mqttClient.disconnect();
-                    System.out.println("MQTTCLIENT NULL E MQTT CLIENT CONNECTADO");
-
-                }
-                if (mqttClient != null) {
-                    System.out.println("MQTTCLIENT NULL");
-
-                    mqttClient.close();
-                    System.out.println("MQTTCLIENT NULL");
-
-                }
-            } catch (MqttException e) {
-                System.out.println("TRATATIVA MQTT TRAVADO");
-                e.printStackTrace();
-            }
+            span.end();
         }
-
-        span.end();
     }
 }

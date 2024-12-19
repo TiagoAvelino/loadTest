@@ -1,7 +1,5 @@
 package org.acme.kafka;
 
-import java.util.Properties;
-
 import org.acme.mqtt.MqttSendMessage;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
@@ -9,70 +7,59 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Scope;
+import java.util.Properties;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class KafkaSend {
 
-    @Inject
-    Tracer tracer;
+    private static final Logger LOGGER = Logger.getLogger(KafkaSend.class.getName());
 
     @ConfigProperty(name = "kafka.bootstrap.server")
-    private String BOOTSTRAP_SERVERS = "my-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092";
+    String bootstrapServers;
+
+    public String getBootstrapServers() {
+        return bootstrapServers;
+    }
 
     public void sendMessage(MqttSendMessage message, String key, String topic) {
-        tracer = GlobalOpenTelemetry.getTracer("cons-mqtt-produce-kafka", "1.0");
-
-        Span span = createSpan(key, topic);
-        System.out.println(BOOTSTRAP_SERVERS);
+        LOGGER.info(() -> String.format("Preparing to send message to Kafka. Topic: %s, Key: %s, Message: %s", topic,
+                key, message));
+        System.out.println(topic);
 
         try (Producer<String, MqttSendMessage> producer = createKafkaProducer()) {
-
-            sendRecord(producer, message, key, topic, span);
-
+            sendRecord(producer, message, key, topic);
         } catch (Exception e) {
-            System.err.println("Exception occurred: " + e.getMessage());
-        } finally {
-            span.end();
+            LOGGER.log(Level.SEVERE, "Exception occurred while sending message to Kafka", e);
         }
     }
 
-    private Span createSpan(String key, String topic) {
-        return tracer.spanBuilder("Producer-Message-Kafka")
-                .setSpanKind(SpanKind.PRODUCER)
-                .setAttribute(key, topic)
-                .startSpan();
-    }
-
     private Producer<String, MqttSendMessage> createKafkaProducer() {
+        LOGGER.info("Creating Kafka producer with bootstrap servers: " + bootstrapServers);
         Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-                "org.apache.kafka.common.serialization.StringSerializer");
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-                "org.acme.mqtt.MqttSendMessageSerializer");
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer");
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.acme.mqtt.MqttSendMessageSerializer");
 
         return new KafkaProducer<>(props);
     }
 
     private void sendRecord(Producer<String, MqttSendMessage> producer, MqttSendMessage message, String key,
-            String topic, Span span) {
-        try (Scope scope = span.makeCurrent()) {
-            ProducerRecord<String, MqttSendMessage> record = new ProducerRecord<>(topic, key, message);
-            producer.send(record, (metadata, exception) -> {
-                if (exception != null) {
-                    System.err.println("Error sending message: " + exception.getMessage());
-                } else {
-                    // Add any additional processing here
-                }
-            });
-            producer.flush();
-        }
+            String topic) {
+        LOGGER.info(
+                () -> String.format("Sending record to Kafka. Topic: %s, Key: %s, Message: %s", topic, key, message));
+        ProducerRecord<String, MqttSendMessage> record = new ProducerRecord<>(topic, key, message);
+        producer.send(record, (metadata, exception) -> {
+            if (exception != null) {
+                LOGGER.log(Level.SEVERE, "Error sending message to Kafka", exception);
+            } else {
+                LOGGER.info(() -> String.format("Message sent successfully. Topic: %s, Partition: %d, Offset: %d",
+                        metadata.topic(), metadata.partition(), metadata.offset()));
+            }
+        });
+        producer.flush();
     }
 }

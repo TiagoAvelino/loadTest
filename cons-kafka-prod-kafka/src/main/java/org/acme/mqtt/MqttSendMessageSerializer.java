@@ -1,35 +1,19 @@
 package org.acme.mqtt;
 
-import java.io.ByteArrayOutputStream;
-import java.io.ObjectOutputStream;
-import java.util.Map;
-
 import org.apache.kafka.common.serialization.Serializer;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 public class MqttSendMessageSerializer implements Serializer<MqttSendMessage> {
 
-    @Override
-    public void configure(Map<String, ?> configs, boolean isKey) {
-        // No additional configuration needed
-    }
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     public byte[] serialize(String topic, MqttSendMessage data) {
         try {
-            ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-            ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);
-            objectOutputStream.writeObject(data);
-            objectOutputStream.flush();
-            objectOutputStream.close();
-            return byteArrayOutputStream.toByteArray();
+            return objectMapper.writeValueAsBytes(data);
         } catch (Exception e) {
-            e.printStackTrace();
-            return null;
+            throw new RuntimeException("Failed to serialize MqttSendMessage", e);
         }
-    }
-
-    @Override
-    public void close() {
-        // No resources to close
     }
 }

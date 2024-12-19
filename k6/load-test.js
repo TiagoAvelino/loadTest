@@ -22,10 +22,18 @@ export default function () {
         "jwt": "teste"
      });
     const headers = { 'Content-Type': 'application/json','Accept':'*/*' };
-    const res = http.post('http://mqtt-producer-horus.apps.lab-cluster.sandbox3196.opentlc.com/mqtt/send?topic=mqtt-message-in/1/2/app/test', payload, { headers });
+    const res = http.post('http://mqtt-producer-horus.apps.meu-cluster.sandbox868.opentlc.com/mqtt/send?topic=mqtt-message-in/1/2/app/test', payload, { headers });
 
     check(res, {
         'Post status is 200': (r) => res.status === 200
     });
 }
 
+//curl -X POST \
+// http://localhost:8080/mqtt/send?topic=mqtt-message-in/1/2/app/test \
+// -H "Content-Type: application/json" \
+// -H "Accept: */*" \
+// -d '{
+//       "message": "teste1",
+//       "jwt": "teste"
+//     }'

@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "preLaunchTask": "quarkus:dev (mqtt-server)",
+            "type": "java",
+            "request": "attach",
+            "hostName": "localhost",
+            "name": "Debug Quarkus application (mqtt-server)",
+            "port": 5005
+        }
+    ]
+}

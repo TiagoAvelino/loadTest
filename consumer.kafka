@@ -1,0 +1,10 @@
+CONSUMER consumer-group-id
+topic: app.test.push
+partitions: 0,1,2
+from: 0
+
+
+PRODUCER keyed-message2
+topic: app.test.push
+key: mykeyq
+{"jwt":"teste","message":"teste68 - Mensagem consumida","host":"192.168.1.104"}

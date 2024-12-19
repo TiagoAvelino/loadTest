@@ -85,13 +85,13 @@ oc apply -f strimzi-pod-monitor.yaml
 Create a rules for prometheus
 
 ```bash
-oc apply prometheus-rules.yaml
+oc apply -f prometheus-rules.yaml
 ```
 
 Create additional rules for prometheus
 
 ```bash
-oc apply - f prometheus-additional.yaml
+oc apply -f prometheus-additional.yaml
 ```
 
 Finally create a prometheus instance

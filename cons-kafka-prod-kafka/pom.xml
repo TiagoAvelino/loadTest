@@ -98,8 +98,8 @@
             <version>4.1.111.Final</version>
         </dependency> -->
         <dependency>
-            <groupId>org.apache.kafka</groupId>
-            <artifactId>kafka-clients</artifactId>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-messaging-kafka</artifactId>
         </dependency>
         <dependency>
             <groupId>io.opentelemetry</groupId>

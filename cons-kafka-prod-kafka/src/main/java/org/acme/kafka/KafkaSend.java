@@ -1,75 +1,58 @@
 package org.acme.kafka;
 
 import java.util.Properties;
+import java.util.concurrent.Future;
 
 import org.acme.mqtt.MqttSendMessage;
 import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.Producer;
-import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Scope;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class KafkaSend {
 
-    @Inject
-    Tracer tracer;
+    @ConfigProperty(name = "kafka.bootstrap.servers")
+    String bootstrapServers;
 
-    @Inject
-    @ConfigProperty(name = "kafka.bootstrap.server")
-    private String BOOTSTRAP_SERVERS = "my-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092";
+    public String getBootstrapServers() {
+        return bootstrapServers;
+    }
+
+    private KafkaProducer<String, MqttSendMessage> kafkaProducer;
+
+    @PostConstruct
+    public void initialize() {
+        Properties props = new Properties();
+        props.put("bootstrap.servers", bootstrapServers);
+        props.put("key.serializer", StringSerializer.class.getName());
+        props.put("value.serializer", "org.acme.mqtt.MqttSendMessageSerializer"); // Custom serializer
+        props.put("acks", "all"); // Ensure message durability
+        kafkaProducer = new KafkaProducer<>(props);
+    }
 
     public void sendMessage(MqttSendMessage message, String key, String topic) {
-        tracer = GlobalOpenTelemetry.getTracer("mqtt-kafka", "1.0");
-
-        // Start a span for this operation
-        Span span = tracer.spanBuilder("Producer-Message-Kafka")
-                .setSpanKind(SpanKind.PRODUCER).setAttribute(key, topic)
-                .startSpan();
-        // Kafka producer configuration
-        Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-                "org.apache.kafka.common.serialization.StringSerializer");
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.acme.mqtt.MqttSendMessageSerializer");
-
-        // Create Kafka producer
-        Producer<String, MqttSendMessage> producer = new KafkaProducer<>(props);
-
         try {
-            // Create a message
-
-            // Send the message to the topic
-            try (Scope scope = span.makeCurrent()) {
-
-                ProducerRecord<String, MqttSendMessage> record = new ProducerRecord<>(topic, key, message);
-                producer.send(record, (metadata, exception) -> {
-                    if (exception != null) {
-                        System.err.println("Error sending message: " + exception.getMessage());
-                    } else {
-                        System.err.println("Mensagem enviada para o .push");
-                    }
-                });
-            } finally {
-                // End the span
-                span.end();
-            }
-
-            // Flush and close the producer
-            producer.flush();
+            ProducerRecord<String, MqttSendMessage> record = new ProducerRecord<>(topic, key, message);
+            Future<RecordMetadata> future = kafkaProducer.send(record);
+            RecordMetadata metadata = future.get();
+            System.out.println(
+                    "Message sent successfully to topic: " + metadata.topic() + " at offset: " + metadata.offset());
         } catch (Exception e) {
-            System.err.println("Exception occurred: " + e.getMessage());
-        } finally {
-            producer.close();
+            System.err.println("Failed to send message: " + e.getMessage());
         }
+    }
 
+    @PreDestroy
+    public void close() {
+        if (kafkaProducer != null) {
+            kafkaProducer.close();
+        }
     }
 }
