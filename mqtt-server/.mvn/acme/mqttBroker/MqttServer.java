@@ -22,7 +22,7 @@ public class MqttServer {
     @Inject
     private MqttConsumerService mqttConsumerService;
 
-    @Startup
+    @Startup(10)
     public void start() {
         LOGGER.info("Initializing MQTT Broker...");
         mqttBroker = new Server();

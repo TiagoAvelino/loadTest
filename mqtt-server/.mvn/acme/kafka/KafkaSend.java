@@ -18,7 +18,7 @@ public class KafkaSend {
 
     private static final Logger LOGGER = Logger.getLogger(KafkaSend.class.getName());
 
-    @ConfigProperty(name = "kafka.bootstrap.server")
+    @ConfigProperty(name = "kafka.bootstrap.servers")
     String bootstrapServers;
 
     public String getBootstrapServers() {

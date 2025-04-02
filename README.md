@@ -231,7 +231,7 @@ Now, we back to this repository folder and go create a configmap with our K6 tes
 ```bash
 oc project k6-operator-system
 cd k6
-oc create configmap k6-api-test --from-file kafka-load-tests.js
+oc create configmap k6-api-test --from-file load-tests.js
 ```
 
 Finally, we do create a k6 instance with this command:

@@ -8,6 +8,14 @@
             "hostName": "localhost",
             "name": "Debug Quarkus application (mqtt-server)",
             "port": 5005
+        },
+        {
+            "preLaunchTask": "quarkus:dev (cons-kafka-prod-mqtt)",
+            "type": "java",
+            "request": "attach",
+            "hostName": "localhost",
+            "name": "Debug Quarkus application (cons-kafka-prod-mqtt)",
+            "port": 5005
         }
     ]
 }

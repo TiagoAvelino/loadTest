@@ -7,7 +7,6 @@ import org.acme.mqtt.MqttSendMessage;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.reactive.messaging.Incoming;
-import org.eclipse.microprofile.reactive.messaging.Outgoing;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -18,8 +17,8 @@ public class KafkaMessageConsumer {
     @Inject
     KafkaSend kafkaSend;
 
-    @ConfigProperty(name = "kafka.bootstrap.server")
-    String bootstrapServers;
+    // @ConfigProperty(name = "kafka.bootstrap.servers")
+    // String bootstrapServers;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -32,10 +31,9 @@ public class KafkaMessageConsumer {
             message = new MqttSendMessage();
             message.setMessage("Message Nula");
         } else {
-            message.setMessage(message.getMessage() + " - Mensagem consumida");
+            // message.setMessage(message.getMessage() + " - Mensagem consumida");
         }
         kafkaSend.sendMessage(message, key, topic + ".push"); // Use injected KafkaSend
-        System.out.println("IP SERVER: " + message.getHost());
 
         System.out.println("Processed and forwarded message: " + message.getMessage());
 

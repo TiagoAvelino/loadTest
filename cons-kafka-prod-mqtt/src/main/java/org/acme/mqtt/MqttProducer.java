@@ -1,17 +1,20 @@
 package org.acme.mqtt;
 
-import org.acme.health.IpHealthChecker;
+import java.time.temporal.ChronoUnit;
+import java.util.concurrent.TimeUnit;
 
-import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.api.trace.Tracer;
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
+import org.acme.health.IpHealthChecker;
+import org.eclipse.microprofile.faulttolerance.Timeout;
+import org.eclipse.microprofile.faulttolerance.exceptions.TimeoutException;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
+
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.Tracer;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class MqttProducer {
@@ -33,32 +36,22 @@ public class MqttProducer {
         this.topic = topic;
     }
 
+    // The method will timeout if it takes longer than 30 seconds.
+    @Timeout(value = 12, unit = ChronoUnit.SECONDS)
     public void produce(MqttSendMessage mqttMes) {
         tracer = GlobalOpenTelemetry.getTracer("mqtt-kafka", "1.0");
 
-        Span span = tracer.spanBuilder("Producer-Message-Mqtt")
-                .setSpanKind(SpanKind.PRODUCER).setAttribute("topic", topic)
-                .startSpan();
-
-        System.out.printf("Preparing to send message to topic: %s and host: %s%n", topic,
-                MQTT_BROKER_PREFIX + mqttMes.getHost() + ":1883");
+        System.out.printf("Preparing to send message to topic: %s and host: %s%n",
+                topic, MQTT_BROKER_PREFIX + mqttMes.getHost() + ":1883");
 
         try {
-            // Validate IP and health status before proceeding
-            // if (!ipHealthChecker.isIpReachableAndHealthy(mqttMes.getHost())) {
-            // System.err.printf("IP address %s or its health endpoint is not reachable.
-            // Skipping message.%n",
-            // mqttMes.getHost());
-            // return;
-            // }
-
-            MqttClient mqttClient = new MqttClient(MQTT_BROKER_PREFIX + mqttMes.getHost() + ":1883",
+            MqttClient mqttClient = new MqttClient(
+                    MQTT_BROKER_PREFIX + mqttMes.getHost() + ":1883",
                     MqttClient.generateClientId());
             MqttConnectOptions connectOptions = new MqttConnectOptions();
-            connectOptions.setConnectionTimeout(10); // Set timeout to 10 seconds
-            connectOptions.setKeepAliveInterval(60); // Optional: Set keep-alive interval
-
-            mqttClient.connect();
+            connectOptions.setConnectionTimeout(10); // Connection timeout for establishing the link
+            connectOptions.setKeepAliveInterval(30); // Optional: Set keep-alive interval
+            mqttClient.connect(connectOptions);
             System.out.println("Connected to MQTT broker.");
 
             MqttMessage mqttMessage = new MqttMessage();
@@ -71,8 +64,9 @@ public class MqttProducer {
             System.out.println("Disconnected from MQTT broker.");
         } catch (MqttException e) {
             System.err.printf("Failed to publish message to MQTT broker: %s%n", e.getMessage());
-        } finally {
-            span.end();
+        } catch (TimeoutException e) {
+            System.err.printf("Timeout to publish message to MQTT broker: %s%n", e.getMessage());
+
         }
     }
 }

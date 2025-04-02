@@ -16,6 +16,7 @@ import org.eclipse.paho.client.mqttv3.MqttException;
 import org.jboss.logging.Logger;
 
 import io.opentelemetry.api.trace.Tracer;
+import io.quarkus.runtime.Startup;
 import io.quarkus.runtime.StartupEvent;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.annotation.PreDestroy;
@@ -23,6 +24,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 
+@Startup(20)
 @RegisterForReflection
 @ApplicationScoped
 public class MqttConsumerService {

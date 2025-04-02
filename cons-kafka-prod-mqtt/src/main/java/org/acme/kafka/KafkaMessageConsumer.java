@@ -62,7 +62,7 @@ public class KafkaMessageConsumer {
             mqtt.setTopic(mqttTopic);
             mqtt.produce(message);
 
-            System.out.println("Continuação da mensagem");
+            System.out.println(message);
         } catch (Exception e) {
             System.err.println("Erro ao processar mensagem Kafka:");
             e.printStackTrace();

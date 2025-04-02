@@ -1,10 +1,10 @@
 apiVersion: k6.io/v1alpha1
-kind: K6
+kind: TestRun
 metadata:
   name: k6-sample
   namespace: k6-operator-system
 spec:
-  parallelism: 4
+  parallelism: 10
   script:
     configMap:
       file: load-test.js

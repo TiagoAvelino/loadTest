@@ -72,6 +72,76 @@
 			"options": {
 				"cwd": "mqtt-server"
 			}
+		},
+		{
+			"type": "shell",
+			"isBackground": true,
+			"problemMatcher": [
+				{
+					"owner": "quarkus",
+					"fileLocation": [
+						"relative",
+						"${workspaceFolder}/src/main/resources/templates"
+					],
+					"pattern": [
+						{
+							"regexp": "\\[(\\d+)\\]\\s(.*):(\\d+):(\\d+)\\s\\-\\s{(.*)}:\\s(.*)$",
+							"file": 2,
+							"line": 3,
+							"column": 4,
+							"message": 6
+						}
+					],
+					"background": {
+						"activeOnStart": true,
+						"beginsPattern": "^.*Scanning for projects...",
+						"endsPattern": "(^.*Quarkus .* started in .*\\.)|(^.* ERROR .* Failed to start)"
+					}
+				}
+			],
+			"group": "build",
+			"label": "quarkus:dev (cons-kafka-prod-mqtt)",
+			"command": "./mvnw quarkus:dev ",
+			"windows": {
+				"command": ".\\mvnw.cmd quarkus:dev "
+			},
+			"options": {
+				"cwd": "cons-kafka-prod-mqtt"
+			}
+		},
+		{
+			"type": "shell",
+			"isBackground": true,
+			"problemMatcher": [
+				{
+					"owner": "quarkus",
+					"fileLocation": [
+						"relative",
+						"${workspaceFolder}/src/main/resources/templates"
+					],
+					"pattern": [
+						{
+							"regexp": "\\[(\\d+)\\]\\s(.*):(\\d+):(\\d+)\\s\\-\\s{(.*)}:\\s(.*)$",
+							"file": 2,
+							"line": 3,
+							"column": 4,
+							"message": 6
+						}
+					],
+					"background": {
+						"activeOnStart": true
+					}
+				}
+			],
+			"group": "build",
+			"label": "package -Pnative (cons-kafka-prod-mqtt)",
+			"command": "./mvnw package -Pnative ",
+			"windows": {
+				"command": ".\\mvnw.cmd package -Pnative "
+			},
+			"options": {
+				"cwd": "cons-kafka-prod-mqtt"
+			}
 		}
 	]
 }
