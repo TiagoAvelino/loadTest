@@ -2,7 +2,7 @@ apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaTopic
 metadata:
   labels:
-    strimzi.io/cluster: kafka-cluster
+    strimzi.io/cluster: my-cluster
   name: app.test
   namespace: kafka
 spec:
@@ -12,4 +12,4 @@ spec:
     min.insync.replicas: 1 
   partitions: 6
   replicas: 1
-  topicName: events
+  topicName: app.test

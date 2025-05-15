@@ -1,0 +1,11 @@
+kind: Console
+apiVersion: console.streamshub.github.com/v1alpha1
+metadata:
+  name: example-console
+  namespace: kafka
+spec:
+  hostname: my-console.apps.tiago-cluster.sandbox2008.opentlc.com
+  kafkaClusters:
+    - name: my-cluster
+      namespace: kafka
+      listener: plain

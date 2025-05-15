@@ -5,6 +5,7 @@ import java.util.Properties;
 
 import org.jboss.logging.Logger;
 
+import io.moquette.BrokerConstants;
 import io.moquette.broker.Server;
 import io.moquette.broker.config.MemoryConfig;
 import io.quarkus.runtime.Startup;
@@ -16,7 +17,6 @@ import jakarta.inject.Inject;
 public class MqttServer {
 
     private static final Logger LOGGER = Logger.getLogger(MqttServer.class);
-
     private Server mqttBroker;
 
     @Inject
@@ -27,11 +27,15 @@ public class MqttServer {
         LOGGER.info("Initializing MQTT Broker...");
         mqttBroker = new Server();
         Properties configProps = new Properties();
-        configProps.setProperty("port", "1883");
+        // Standard MQTT port
+        configProps.setProperty(BrokerConstants.PORT_PROPERTY_NAME, "1883");
+        // Enable WebSocket support: default path is /mqtt
+        configProps.setProperty(BrokerConstants.WEB_SOCKET_PORT_PROPERTY_NAME, "8090");
+        configProps.setProperty(BrokerConstants.WEB_SOCKET_PATH_PROPERTY_NAME, BrokerConstants.WEBSOCKET_PATH);
 
         try {
             mqttBroker.startServer(new MemoryConfig(configProps));
-            LOGGER.info("MQTT Broker started on port 1883");
+            LOGGER.info("MQTT Broker started on MQTT port 1883 and WebSocket port 8083");
         } catch (IOException e) {
             LOGGER.error("Failed to start MQTT Broker", e);
         }

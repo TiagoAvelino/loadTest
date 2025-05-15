@@ -262,7 +262,7 @@ Despite using simpler approaches and spending a lot of time deploying metrics to
 
 https://docs.openshift.com/container-platform/4.16/nodes/cma/nodes-cma-autoscaling-custom-trigger.html
 
-Configuring the custom metrics autoscaler to use OpenShift Container Platform monitoring
+<!-- Configuring the custom metrics autoscaler to use OpenShift Container Platform monitoring
 
 You must perform the following tasks, as described in this section:
 
@@ -290,4 +290,4 @@ Add that role to the service account.
 
 Reference the token in the trigger authentication object used by Prometheus.
 
-falta verificar mecanismo de authenticação não está correto**_++++_**+++**+**+_+_+**+_+_+_+_+\_+**+_+_+_+_+_+_+\_+
+falta verificar mecanismo de authenticação não está correto**_++++_**+++**+**+_+_+**+_+_+_+_+\_+**+_+_+_+_+_+_+\_+ -->
