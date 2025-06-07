@@ -7,6 +7,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 
 import org.acme.kafka.KafkaSend;
+import org.acme.kafka.Last5sLookup;
 import org.acme.mqtt.MqttSendMessage;
 import org.eclipse.microprofile.context.ManagedExecutor;
 import org.eclipse.paho.client.mqttv3.IMqttClient;
@@ -41,6 +42,9 @@ public class MqttConsumerService {
 
     @Inject
     ManagedExecutor managedExecutor;
+
+    @Inject
+    Last5sLookup last5s;
 
     public void onStart(@Observes StartupEvent ev) {
         LOGGER.info("Starting MQTT Consumer Service...");

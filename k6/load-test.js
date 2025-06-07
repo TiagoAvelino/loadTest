@@ -8,7 +8,7 @@ export const options = {
             duration: '120s', // total duration
             preAllocatedVUs: 25, // to allocate runtime resources
 
-            rate: 50, // number of constant iterations given `timeUnit`
+            rate: 10, // number of constant iterations given `timeUnit`
             timeUnit: '1s',
         },
     },

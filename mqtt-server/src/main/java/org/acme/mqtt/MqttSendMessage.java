@@ -14,6 +14,7 @@ public class MqttSendMessage implements Serializable {
     private String jwt;
     private String message;
     private String host;
+    private Boolean isThereAny = false;
 
     public byte[] serialize() {
         try {

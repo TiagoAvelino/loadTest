@@ -15,8 +15,8 @@ spec:
       default.replication.factor: 3
       min.insync.replicas: 2
       inter.broker.protocol.version: '3.9'
-    # authorization:
-    #   type: simple
+    authorization:
+      type: simple
     listeners:
       - name: plain
         port: 9092
@@ -26,12 +26,12 @@ spec:
         port: 9093
         tls: true
         type: internal
-      # - name: external
-      #   port: 9094
-      #   type: route
-      #   tls: true
-      #   authentication:
-      #     type: scram-sha-512
+      - name: external
+        port: 9094
+        type: route
+        tls: true
+        authentication:
+          type: scram-sha-512
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:
@@ -56,7 +56,3 @@ spec:
           key: zookeeper-metrics-config.yml
           name: kafka-metrics
     replicas: 3
-    storage:
-      class: gp3-csi
-      size: 5Gi
-      type: persistent-claim  

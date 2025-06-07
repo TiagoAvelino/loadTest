@@ -19,8 +19,8 @@ public class MqttServer {
     private static final Logger LOGGER = Logger.getLogger(MqttServer.class);
     private Server mqttBroker;
 
-    @Inject
-    private MqttConsumerService mqttConsumerService;
+    // @Inject
+    // private MqttConsumerService mqttConsumerService;
 
     @Startup(10)
     public void start() {
@@ -39,7 +39,7 @@ public class MqttServer {
         } catch (IOException e) {
             LOGGER.error("Failed to start MQTT Broker", e);
         }
-        mqttConsumerService.init();
+        // mqttConsumerService.init();
     }
 
     @PreDestroy

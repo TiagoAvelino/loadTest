@@ -20,6 +20,21 @@ public class KafkaSend {
     @ConfigProperty(name = "kafka.bootstrap.servers")
     String bootstrapServers;
 
+    @ConfigProperty(name = "kafka.security.protocol")
+    String securityProtocol;
+
+    @ConfigProperty(name = "kafka.sasl.mechanism")
+    String saslMechanism;
+
+    @ConfigProperty(name = "kafka.sasl.jaas.config")
+    String jaasConfig;
+
+    @ConfigProperty(name = "kafka.ssl.truststore.location")
+    String truststoreLocation;
+
+    @ConfigProperty(name = "kafka.ssl.truststore.password")
+    String truststorePassword;
+
     public String getBootstrapServers() {
         return bootstrapServers;
     }
@@ -32,7 +47,13 @@ public class KafkaSend {
         props.put("bootstrap.servers", bootstrapServers);
         props.put("key.serializer", StringSerializer.class.getName());
         props.put("value.serializer", "org.acme.mqtt.MqttSendMessageSerializer"); // Custom serializer
-        props.put("acks", "all"); // Ensure message durability
+        props.put("acks", "all");
+        props.put("security.protocol", securityProtocol);
+        props.put("sasl.mechanism", saslMechanism);
+        props.put("sasl.jaas.config", jaasConfig);
+        props.put("ssl.truststore.location", truststoreLocation);
+        props.put("ssl.truststore.password", truststorePassword);
+
         kafkaProducer = new KafkaProducer<>(props);
     }
 
