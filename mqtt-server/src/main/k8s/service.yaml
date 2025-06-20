@@ -1,0 +1,38 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: mqtt-server
+  labels:
+    app.kubernetes.io/managed-by: quarkus
+    app.kubernetes.io/name: mqtt-server
+    app.kubernetes.io/version: 1.0.0-SNAPSHOT
+    app.openshift.io/runtime: quarkus
+  annotations:
+    app.quarkus.io/quarkus-version: 3.19.3
+    app.quarkus.io/vcs-uri: 'https://github.com/TiagoAvelino/loadTest.git'
+spec:
+  clusterIP: 172.30.159.113
+  ipFamilies:
+    - IPv4
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080
+    - name: mqtt-ws
+      protocol: TCP
+      port: 8090
+      targetPort: 8090
+    - name: mqtt
+      protocol: TCP
+      port: 1883
+      targetPort: 1883
+  internalTrafficPolicy: Cluster
+  clusterIPs:
+    - 172.30.159.113
+  type: ClusterIP
+  ipFamilyPolicy: SingleStack
+  sessionAffinity: None
+  selector:
+    app.kubernetes.io/name: mqtt-server
+    app.kubernetes.io/version: 1.0.0-SNAPSHOT

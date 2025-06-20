@@ -85,7 +85,6 @@ public class KafkaMessageConsumer {
     private void resumeConsumer(String channel) {
         try {
             kafkaClientService.getConsumer(channel).resume();
-            System.out.println("Consumo retomado para o canal: " + channel);
         } catch (Exception e) {
             System.err.println("Erro ao retomar o consumidor para o canal " + channel + ":");
             e.printStackTrace();

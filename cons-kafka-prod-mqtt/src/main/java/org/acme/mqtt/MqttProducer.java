@@ -10,6 +10,7 @@ import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.trace.Tracer;
@@ -47,7 +48,7 @@ public class MqttProducer {
         try {
             MqttClient mqttClient = new MqttClient(
                     MQTT_BROKER_PREFIX + mqttMes.getHost() + ":1883",
-                    MqttClient.generateClientId());
+                    MqttClient.generateClientId(), new MemoryPersistence());
             MqttConnectOptions connectOptions = new MqttConnectOptions();
             connectOptions.setConnectionTimeout(10); // Connection timeout for establishing the link
             connectOptions.setKeepAliveInterval(30); // Optional: Set keep-alive interval
@@ -63,9 +64,10 @@ public class MqttProducer {
             mqttClient.disconnect();
             System.out.println("Disconnected from MQTT broker.");
         } catch (MqttException e) {
-            System.err.printf("Failed to publish message to MQTT broker: %s%n", e.getMessage());
+            System.err.printf("Failed to publish message to MQTT broker: %s %s %s%n", e.getMessage(), e.getCause(),
+                    e.getReasonCode());
         } catch (TimeoutException e) {
-            System.err.printf("Timeout to publish message to MQTT broker: %s%n", e.getMessage());
+            System.err.printf("Timeout to publish message to MQTT broker: %s%n", e.getMessage(), e.getCause());
 
         }
     }

@@ -1,16 +1,9 @@
 package org.acme.kafka;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
 import org.acme.mqtt.MqttSendMessage;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.eclipse.microprofile.reactive.messaging.Channel;
-import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.eclipse.microprofile.reactive.messaging.Incoming;
-import org.eclipse.microprofile.reactive.messaging.Message;
 
-import io.smallrye.reactive.messaging.kafka.KafkaRecord;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -20,10 +13,10 @@ public class KafkaMessageConsumer {
     @Inject
     KafkaSend kafkaSend;
 
-    @Inject
-    @Channel("app-test-window") // <── outgoing channel defined above
-    Emitter<Message<MqttSendMessage>> windowOut;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    // @Inject
+    // @Channel("app-test-window") // <── outgoing channel defined above
+    // Emitter<Message<MqttSendMessage>> windowOut;
+    // private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @Incoming("app.test")
     public MqttSendMessage consumeMessages(ConsumerRecord<String, MqttSendMessage> record) {
@@ -41,12 +34,12 @@ public class KafkaMessageConsumer {
         kafkaSend.sendMessage(message, key, topicEnvio); // Use injected KafkaSend
         // TODO IMPLEMENTAR STREAMS
         System.out.println("Processed and forwarded message: " + message.getMessage());
-        windowOut.send(KafkaRecord.of(key, message)); // key + value in one line
+        // windowOut.send(KafkaRecord.of(key, message)); // key + value in one line
 
         return message;
     }
 
     public void shutdown() {
-        executor.shutdown();
+        // executor.shutdown();
     }
 }

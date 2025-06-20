@@ -10,6 +10,7 @@ import org.eclipse.paho.client.mqttv3.IMqttClient;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jboss.logging.Logger;
 
 import io.quarkus.runtime.Startup;
@@ -40,7 +41,7 @@ public class MqttConsumer {
 
     public void init() {
         try {
-            client = new MqttClient(broker, "user");
+            client = new MqttClient(broker, "user", new MemoryPersistence());
             MqttConnectOptions options = new MqttConnectOptions();
             options.setCleanSession(true);
 

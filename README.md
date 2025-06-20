@@ -15,32 +15,66 @@ On the other hand, if you're seeking a more comprehensive and flexible approach,
 This approach allows simulating the production and consumption behavior of data in an environment closer to the real-world usage scenario. You can create custom test cases, including specific interactions with other parts of the system, data manipulation, integrity validations, and other relevant aspects for your use case. That's why I chose this approach to demonstrate in this repository. The topics below will show how to deploy each tool so that we can eventually run the tests. To get started, you'll need a Red Hat OpenShift cluster and the following three namespaces:
 
 - kafka: for deploying Kafka and Kafka Exporter
-- tracing-plataform: for deploying Elasticsearch and Jaeger
-- camel-quarkus-apps: for deploying the producer and consumer applications
+- openshift-tempo-operator: for deploying OpenTelemetry and Tempo operators
 
 ## Deploy the Open Telemetry
 
-Log on Openshift, select tracing-plataform project and from Operator Hub, install Elastisearch Operator:
+In order to get the data from our application, first is necessary to Install two operators: **Red Hat build of OpenTelemetry** and **Tempo Operator**.
 
-![](images/ElasticSearchOperator.png)
+In Openshift operator hub search for Red Hat build of OpenTelemetry and install with default configuration.
 
-Install it with default parameters, after Elastic Search Operator was successfully installed, from Operator Hub again, install Open Distributed Tracing Operator:
+![](images/Opentelemetry.png)
+
+After the operator get installed we can proced with the configuration of a new CRD for our collector for this we have to apply the [collector.yaml](opentelemetry/collector.yaml)
 
 ![](images/OpenDistributedTracingOperator.png)
 
-After OpenDistributed Tracing was successfully installed, you can see it on installed operators. Click on it and click in "create instance" like bellow:
+```bash
+oc new-project openshift-tempo-operator
+oc apply -f opentelemetry/collector.yaml -n openshift-tempo-operator
+```
 
-![](images/OpendistributedTracingInstance.png)
+### Configure Tempo Operator
 
-Create a Jaeger Custom Resource with the parameters in file [jaeger-cr.yaml](jaeger/jaeger.yaml) in folder jaeger like bellow:
+To collect and analyze telemetry data from our application, we need to configure the OpenShift Tempo Operator. This operator provides a user interface to visualize the telemetry data collected by the application. To function correctly, the Tempo Operator requires an S3-compatible storage backend.
 
-![](images/JaegerCR.png)
+#### Step 1: Set Up MinIO S3 Storage
 
-After it's created, you can check if Jaeger is functioning by accessing the route created for it.
+First, configure your storage by creating a MinIO S3 bucket. Deploy MinIO by applying the provided [minio.yaml](opentelemetry/minio.yaml) file in the `minio` namespace:
+
+```bash
+oc apply -f opentelemetry/minio.yaml -n minio
+```
+
+After installation, access the MinIO web interface by retrieving the MinIO UI route in OpenShift. Log in with the following credentials:
+
+- **Username:** `minio`
+- **Password:** `minio123`
+
+Create a bucket named `tempo` to store telemetry data.
+
+![MinIO Bucket Creation](images/Bucket.png)
+
+### Step 2: Configure Tempo Operator
+
+With the bucket ready, configure your Tempo stack. First, install the Tempo Operator from the Operator catalog in OpenShift.
+
+![Tempo Operator Configuration](images/Tempo.png)
+
+Then apply the provided [tempo.yaml](opentelemetry/tempo.yaml) file to deploy the Tempo stack with Jaeger interface for data visualization.
+
+```bash
+oc apply -f opentelemetry/secret-minio.yaml -n openshift-tempo-operator
+oc apply -f opentelemetry/tempo.yaml -n openshift-tempo-operator
+```
+
+### Step 3: Verify Tempo Stack
+
+After creating the Tempo stack, verify its operation by accessing the Tempo route provided by OpenShift.
 
 ## Deploy Kafka Cluster and Kafka Exporter
 
-Now that we have a functional Jaeger, we will deploy our Kafka Cluster with the Kafka Exporter. Change target project to "kafka" project created previously.
+Now that we have a functional Opentelemetry, we will deploy our Kafka Cluster with the Kafka Exporter. Change target project to "kafka" project created previously.
 In Openshift Operator hub, install AMQ Streams Operator with default configuration like image below:
 
 ![](images/AMQStreamsOperator.png)
@@ -129,78 +163,89 @@ We should copy the content of the file [strimzi-kafka-exporter.json](grafana/str
 
 There you have it, the first dashboard is created. If you wish, you can repeat the process for the files [strimzi-kafka.json](grafana/strimzi-kafka.json) and [strimzi-zookeeper.json](grafana/strimzi-zookeeper.json).
 
-# mqtt-broker
+# MQTT Connector Application
 
-There are three projects here, mqtt-producer, mqtt-server and cons-kafka-prod-kafka-mqtt. To run this application you need to run first mqq-server, and after that mqtt-producer and cons-kafka-prod-kafka-mqtt.
-For run mqtt-server:
+This repository contains four projects: `mqtt-producer`, `mqtt-server`, `cons-kafka-prod-kafka`, and `cons-kafka-prod-mqtt`. To run the application locally:
 
-```
+1. Run `mqtt-server` first:
+
+```bash
 cd mqtt-server
 quarkus dev
 ```
 
-For run mqtt-producer.
+2. Run `mqtt-producer`:
 
-```
+```bash
 cd mqtt-producer
 quarkus dev
 ```
 
-For run cons-kafka-prod-mqtt.
+3. Run `cons-kafka-prod-kafka`:
 
-```
+```bash
 cd cons-kafka-prod-kafka
 quarkus dev
 ```
 
-For run cons-kafka-prod-mqtt.
+4. Run `cons-kafka-prod-mqtt`:
 
-```
-cd cons-kafka-prod-kafka
+```bash
+cd cons-kafka-prod-mqtt
 quarkus dev
 ```
 
-To test the application is necessary to send a post to the endpoint mqtt/send. After that you can follow the logs of the consumer application.
+### Testing the Application
 
-```
-curl -X POST 'http://mqtt-producer-camel-quarkus-apps.apps.tiago-cluster.sandbox1393.opentlc.com/mqtt/send?topic=mqtt-message-in/1/2/app/test' \
+Send a POST request to the `mqtt/send` endpoint to test the application:
+
+```bash
+curl -X POST 'http://localhost/mqtt/send?topic=mqtt-message-in/1/2/app/test' \
 -H 'Content-Type: application/json' \
 -H 'Accept: */*' \
 -d '{"message": "teste1", "jwt": "teste"}'
 ```
 
-For deploying thouse applications in openshift is necessary to config the tag quarkus.openshift.deploy=true in application.properties and select your project and after that just build the application. For mqtt-server is necessary to edit the service and add the mqtt port to accept the connection to the server.
+## Deploying to OpenShift
 
-```
+There are two deployment methods:
+
+### Method 1: Automatic Deployment
+
+Add `quarkus.openshift.deploy=true` in `application.properties`. Then:
+
+```bash
 oc project <<my-project>>
-cd mqtt-server
+cd <project-directory>
 quarkus build
+```
 
+For `mqtt-server`, manually edit the service configuration to include:
+
+```yaml
 service:
-    - name: mqtt
-      protocol: TCP
-      port: 1883
-      targetPort: 1883
+  - name: mqtt
+    protocol: TCP
+    port: 1883
+    targetPort: 1883
 ```
 
-For producer application:
+### Method 2: Manual Deployment (command to build jar mvn package -Dquarkus.package.type=uber-jar)
 
-```
-oc project <<my-project>>
-cd mqtt-producer
-quarkus build
-```
+Deploy using pre-built images:
 
-```
-oc project <<my-project>>
-cd cons-kafka-prod-kafka
-quarkus build
-```
+```bash
+oc apply -f mqtt-server/src/main/k8s/deployment.yaml -n kafka
+oc apply -f mqtt-server/src/main/k8s/service.yaml -n kafka
 
-```
-oc project <<my-project>>
-cd cons-kafka-prod-mqtt
-quarkus build
+oc apply -f mqtt-producer/src/main/k8s/deployment.yaml -n kafka
+oc apply -f mqtt-producer/src/main/k8s/service.yaml -n kafka
+
+oc apply -f cons-kafka-prod-kafka/src/main/k8s/deployment.yaml -n kafka
+oc apply -f cons-kafka-prod-kafka/src/main/k8s/service.yaml -n kafka
+
+oc apply -f cons-kafka-prod-mqtt/src/main/k8s/deployment.yaml -n kafka
+oc apply -f cons-kafka-prod-mqtt/src/main/k8s/service.yaml -n kafka
 ```
 
 ## K6 tests
@@ -264,6 +309,10 @@ https://docs.openshift.com/container-platform/4.16/nodes/cma/nodes-cma-autoscali
 
 <!-- Configuring the custom metrics autoscaler to use OpenShift Container Platform monitoring
 
+oc create secret generic kafka-auth --from-literal username=redhat-user --from-literal password=redhat123
+oc get secret my-cluster-cluster-ca-cert -n kafka -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+oc create secret generic kafka-client-ssl-secret --from-file=truststore.jks --from-literal truststore-password=redhat
+keytool -import -file ca.crt -alias ca -keystore truststore.jks -storepass redhat -noprompt
 You must perform the following tasks, as described in this section:
 
 Create a service account.

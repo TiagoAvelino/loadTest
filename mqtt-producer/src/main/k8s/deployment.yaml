@@ -1,0 +1,63 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  annotations:
+    app.quarkus.io/commit-id: e1be31ab83f8577c8ca38c19c3acc33bb445d9d1
+    app.quarkus.io/quarkus-version: 3.19.3
+  name: mqtt-producer
+  labels:
+    app.kubernetes.io/managed-by: quarkus
+    app.kubernetes.io/name: mqtt-producer
+    app.kubernetes.io/version: 1.0.0-SNAPSHOT
+    app.openshift.io/runtime: quarkus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mqtt-producer
+      app.kubernetes.io/version: 1.0.0-SNAPSHOT
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/managed-by: quarkus
+        app.kubernetes.io/name: mqtt-producer
+        app.kubernetes.io/version: 1.0.0-SNAPSHOT
+        app.openshift.io/runtime: quarkus
+      annotations:
+        alpha.image.policy.openshift.io/resolve-names: '*'
+        app.openshift.io/vcs-uri: <<unknown>>
+        app.quarkus.io/build-timestamp: '2025-06-17 - 18:48:33 +0000'
+        app.quarkus.io/commit-id: e1be31ab83f8577c8ca38c19c3acc33bb445d9d1
+        app.quarkus.io/quarkus-version: 3.19.3
+        app.quarkus.io/vcs-uri: 'https://github.com/TiagoAvelino/loadTest.git'
+        openshift.openshift.io/restartedAt: '2025-06-17T19:26:11.073Z'
+    spec:
+      containers:
+        - name: mqtt-producer
+          image: 'image-registry.openshift-image-registry.svc:5000/kafka/mqtt-producer@sha256:ed890ed0c67d707caac6f1e1fffcc586ef020bd6db5b36aeaf972c73c26f38a2'
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: SERVICE
+              value: 'ws://mqtt-server:8090'
+            - name: JAVA_APP_JAR
+              value: /deployments/quarkus-run.jar
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          imagePullPolicy: Always
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600

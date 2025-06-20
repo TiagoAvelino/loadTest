@@ -1,0 +1,123 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  annotations:
+    app.quarkus.io/quarkus-version: 3.23.4
+    app.quarkus.io/vcs-uri: 'https://github.com/TiagoAvelino/loadTest.git'
+  name: mqtt-server
+  namespace: kafka
+  labels:
+    app.kubernetes.io/managed-by: quarkus
+    app.kubernetes.io/name: mqtt-server
+    app.kubernetes.io/version: 1.0.0-SNAPSHOT
+    app.openshift.io/runtime: quarkus
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mqtt-server
+      app.kubernetes.io/version: 1.0.0-SNAPSHOT
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/managed-by: quarkus
+        app.kubernetes.io/name: mqtt-server
+        app.kubernetes.io/version: 1.0.0-SNAPSHOT
+        app.openshift.io/runtime: quarkus
+      annotations:
+        alpha.image.policy.openshift.io/resolve-names: '*'
+        app.quarkus.io/quarkus-version: 3.23.4
+        app.quarkus.io/vcs-uri: 'https://github.com/TiagoAvelino/loadTest.git'
+    spec:
+      volumes:
+        - name: truststore
+          secret:
+            secretName: kafka-client-ssl-secret
+            defaultMode: 384
+            optional: false
+      containers:
+        - resources: {}
+          readinessProbe:
+            httpGet:
+              path: /q/health/ready
+              port: 9000
+              scheme: HTTP
+            initialDelaySeconds: 5
+            timeoutSeconds: 10
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          terminationMessagePath: /dev/termination-log
+          name: mqtt-server
+          livenessProbe:
+            httpGet:
+              path: /q/health/live
+              port: 9000
+              scheme: HTTP
+            initialDelaySeconds: 5
+            timeoutSeconds: 10
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: 'my-cluster-kafka-bootstrap-kafka.apps.tiago-cluster.sandbox1433.opentlc.com:443'
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: 'true'
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-auth
+                  key: password
+            - name: TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-client-ssl-secret
+                  key: truststore-password
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-auth
+                  key: username
+            - name: SERVICE
+              value: 'tcp://localhost:1883'
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: 'http://dev-collector.openshift-tempo-operator.svc.cluster.local:4317'
+            - name: JAVA_APP_JAR
+              value: /deployments/mqtt-server-1.0.0-SNAPSHOT-runner.jar
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: management
+              containerPort: 9000
+              protocol: TCP
+          imagePullPolicy: Always
+          startupProbe:
+            httpGet:
+              path: /q/health/started
+              port: 9000
+              scheme: HTTP
+            initialDelaySeconds: 5
+            timeoutSeconds: 10
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          volumeMounts:
+            - name: truststore
+              mountPath: /mnt/truststore
+          terminationMessagePolicy: File
+          image: quay.io/rh_ee_tavelino/mqtt-server:latest
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600

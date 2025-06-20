@@ -5,10 +5,20 @@ import java.io.ObjectOutputStream;
 import java.io.Serializable;
 
 public class MqttSendMessage implements Serializable {
+    private static final long serialVersionUID = 4765951209949270128L;
 
     private String jwt;
     private String message;
     private String host;
+    private Boolean isThereAny = false;
+
+    public void setIsThereANy(Boolean isThereAny) {
+        this.isThereAny = isThereAny;
+    }
+
+    public Boolean getIsThereANy() {
+        return this.isThereAny;
+    }
 
     public void setJwt(String jwt) {
         this.jwt = jwt;

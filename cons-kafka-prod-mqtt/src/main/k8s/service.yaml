@@ -1,0 +1,30 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: cons-kafka-prod-mqtt
+  labels:
+    app.kubernetes.io/managed-by: quarkus
+    app.kubernetes.io/name: cons-kafka-prod-mqtt
+    app.kubernetes.io/version: 1.0.0-SNAPSHOT
+    app.openshift.io/runtime: quarkus
+  annotations:
+    app.quarkus.io/quarkus-version: 3.23.0
+    app.quarkus.io/vcs-uri: 'https://github.com/TiagoAvelino/loadTest.git'
+spec:
+  clusterIP: 172.30.132.207
+  ipFamilies:
+    - IPv4
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080
+  internalTrafficPolicy: Cluster
+  clusterIPs:
+    - 172.30.132.207
+  type: ClusterIP
+  ipFamilyPolicy: SingleStack
+  sessionAffinity: None
+  selector:
+    app.kubernetes.io/name: cons-kafka-prod-mqtt
+    app.kubernetes.io/version: 1.0.0-SNAPSHOT

@@ -9,6 +9,7 @@ import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jboss.logging.Logger;
 
 import jakarta.annotation.PreDestroy;
@@ -34,7 +35,7 @@ public class MqttClientService {
         if (client == null || !client.isConnected()) {
             try {
                 logger.info("Connecting to: " + broker + " Mqtt Server");
-                client = new MqttClient(broker, MqttClient.generateClientId());
+                client = new MqttClient(broker, MqttClient.generateClientId(), new MemoryPersistence());
                 MqttConnectOptions connOpts = new MqttConnectOptions();
                 connOpts.setCleanSession(true);
                 connOpts.setMaxInflight(1000);

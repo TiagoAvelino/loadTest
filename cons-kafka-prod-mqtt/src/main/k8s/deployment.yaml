@@ -1,0 +1,89 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  annotations:
+    app.quarkus.io/commit-id: e1be31ab83f8577c8ca38c19c3acc33bb445d9d1
+    app.quarkus.io/quarkus-version: 3.23.0
+    deployment.kubernetes.io/revision: '1'
+  resourceVersion: '514733'
+  name: cons-kafka-prod-mqtt
+  generation: 1
+  labels:
+    app.kubernetes.io/managed-by: quarkus
+    app.kubernetes.io/name: cons-kafka-prod-mqtt
+    app.kubernetes.io/version: 1.0.0-SNAPSHOT
+    app.openshift.io/runtime: quarkus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cons-kafka-prod-mqtt
+      app.kubernetes.io/version: 1.0.0-SNAPSHOT
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/managed-by: quarkus
+        app.kubernetes.io/name: cons-kafka-prod-mqtt
+        app.kubernetes.io/version: 1.0.0-SNAPSHOT
+        app.openshift.io/runtime: quarkus
+      annotations:
+        alpha.image.policy.openshift.io/resolve-names: '*'
+        app.openshift.io/vcs-uri: <<unknown>>
+        app.quarkus.io/build-timestamp: '2025-06-18 - 13:55:12 +0000'
+        app.quarkus.io/commit-id: e1be31ab83f8577c8ca38c19c3acc33bb445d9d1
+        app.quarkus.io/quarkus-version: 3.23.0
+        app.quarkus.io/vcs-uri: 'https://github.com/TiagoAvelino/loadTest.git'
+    spec:
+      volumes:
+        - name: truststore
+          secret:
+            secretName: kafka-client-ssl-secret
+            defaultMode: 384
+            optional: false
+      containers:
+        - resources: {}
+          terminationMessagePath: /dev/termination-log
+          name: cons-kafka-prod-mqtt
+          env:
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-auth
+                  key: username
+            - name: TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-client-ssl-secret
+                  key: truststore-password
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: 'my-cluster-kafka-bootstrap-kafka.apps.tiago-cluster.sandbox1433.opentlc.com:443'
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-auth
+                  key: password
+            - name: JAVA_APP_JAR
+              value: /deployments/cons-kafka-prod-mqtt-1.0.0-SNAPSHOT-runner.jar
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          imagePullPolicy: Always
+          volumeMounts:
+            - name: truststore
+              mountPath: /mnt/truststore
+          terminationMessagePolicy: File
+          image: quay.io/rh_ee_tavelino/cons-kafka-prod-mqtt:latest
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
