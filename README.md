@@ -248,6 +248,41 @@ oc apply -f cons-kafka-prod-mqtt/src/main/k8s/deployment.yaml -n kafka
 oc apply -f cons-kafka-prod-mqtt/src/main/k8s/service.yaml -n kafka
 ```
 
+Here is a clear, concise explanation in Markdown format suitable for your `README.md` file:
+
+---
+
+#### Script Explanation and Usage
+
+This script automates the deployment and setup of OpenTelemetry observability components and Kafka-based microservices onto an OpenShift cluster. To run the script, ensure you are logged into your OpenShift environment with appropriate permissions (`oc login`). Make sure that all YAML configuration files (`opentelemetry/*.yaml` and application deployment manifests) exist in the expected paths relative to your script.
+
+Execute the script from your terminal as follows:
+
+```bash
+chmod +x script-name.sh
+./script-name.sh
+```
+
+**The script execution consists of three main steps:**
+
+**Step 1: OpenTelemetry Setup**
+
+- Creates (or switches to, if already existing) the OpenShift namespaces (`openshift-tempo-operator`, `minio`) needed for OpenTelemetry and Minio storage.
+- Applies YAML configuration files for deploying OpenTelemetry Collector, Minio storage, required secrets, and the Tempo observability backend.
+
+**Step 2: Kafka Secrets Configuration**
+
+- Creates (or switches to) the Kafka application namespace (`kafka`).
+- Creates Kafka authentication secrets (username/password).
+- Extracts the Kafka cluster CA certificate, builds a Java truststore file (`truststore.jks`), and securely stores it as an OpenShift secret for SSL connectivity. Temporary files created during this process are cleaned up afterward.
+
+**Step 3: Microservices Deployment**
+
+- Iterates over the listed Kafka-related microservices (`mqtt-producer`, `mqtt-server`, `cons-kafka-prod-kafka`, `cons-kafka-prod-mqtt`).
+- Applies their Kubernetes Deployment YAML manifests and, if available, the corresponding Service YAML manifests, deploying them into the `kafka` namespace.
+
+The script utilizes idempotent OpenShift commands (`oc apply`) and proper error handling to ensure safe execution and easy re-runs.
+
 ## K6 tests
 
 K6 is an open-source load testing tool designed for developers and focused on simplicity and scalability. It allows you to write and execute load tests using JavaScript, making it easy to define complex scenarios and simulate realistic user behavior. With K6, you can generate high levels of concurrent virtual users to stress test your system and measure its performance under different load conditions. It provides detailed metrics and real-time results, enabling you to identify bottlenecks, measure response times, and assess the scalability and stability of your application. K6's scripting capabilities, extensibility, and integration with other tools make it a popular choice for load testing in agile development and continuous integration workflows.
