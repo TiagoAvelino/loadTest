@@ -1,14 +1,7 @@
 package org.acme.mqtt;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.eclipse.paho.client.mqttv3.IMqttClient;
-import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
-import org.eclipse.paho.client.mqttv3.IMqttToken;
-import org.eclipse.paho.client.mqttv3.MqttCallback;
-import org.eclipse.paho.client.mqttv3.MqttClient;
-import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
-import org.eclipse.paho.client.mqttv3.MqttException;
-import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.eclipse.paho.client.mqttv3.*;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jboss.logging.Logger;
 
@@ -19,16 +12,15 @@ import jakarta.enterprise.context.ApplicationScoped;
 public class MqttClientService {
 
     private IMqttClient client;
+
     @ConfigProperty(name = "quarkus.openshift.env.vars.service")
     private String broker;
 
     private volatile boolean connecting;
-
     private static final Logger logger = Logger.getLogger(MqttClientService.class);
 
     public void init(String topic) {
         connectAndSubscribe(topic);
-
     }
 
     private synchronized void connectAndSubscribe(String topic) {
@@ -39,15 +31,18 @@ public class MqttClientService {
                 MqttConnectOptions connOpts = new MqttConnectOptions();
                 connOpts.setCleanSession(true);
                 connOpts.setMaxInflight(1000);
+
                 connecting = true;
                 IMqttToken token = client.connectWithResult(connOpts);
                 token.waitForCompletion();
                 connecting = false;
+
                 logger.info("Connected to the: " + broker + " Mqtt Server");
+
                 client.setCallback(getCallback(topic));
-                logger.info("Subscribe to the Topic: " + topic);
-                client.subscribe(topic, 1);
-                logger.info("Successful subscription to topic: " + topic);
+                logger.info("Subscribing to topic: " + topic);
+                client.subscribe(topic, 0);
+                logger.info("Successfully subscribed to topic: " + topic);
             } catch (MqttException me) {
                 connecting = false;
                 logger.error("Error while connecting or subscribing to MQTT broker: ", me);
@@ -58,9 +53,18 @@ public class MqttClientService {
     public void publishMessage(String topic, MqttSendMessage payload) {
         try {
             ensureConnected(topic);
-            MqttMessage message = new MqttMessage(payload.serialize());
-            message.setQos(1);
+
+            byte[] data = payload.serialize();
+            logger.infof("Publishing message. Size: %d bytes", data.length);
+
+            MqttMessage message = new MqttMessage(data);
+            message.setQos(0); // optionally test with 0 for faster throughput
+
+            long start = System.nanoTime();
             client.publish(topic, message);
+            long end = System.nanoTime();
+
+            logger.infof("Published in %.2f ms", (end - start) / 1_000_000.0);
         } catch (MqttException | InterruptedException e) {
             logger.error("Error while publishing message to MQTT broker: ", e);
         }
@@ -70,11 +74,15 @@ public class MqttClientService {
         if (client == null || !client.isConnected()) {
             connectAndSubscribe(topic);
         }
-        while (connecting) {
-            Thread.sleep(100);
+
+        int retries = 0;
+        while (connecting && retries < 50) {
+            Thread.sleep(10); // reduced from 100ms to 10ms for quicker readiness
+            retries++;
         }
+
         if (!client.isConnected()) {
-            throw new IllegalStateException("Failed to connect to MQTT broker");
+            throw new IllegalStateException("Failed to connect to MQTT broker after retries");
         }
     }
 
@@ -84,34 +92,32 @@ public class MqttClientService {
             if (client != null) {
                 client.disconnect();
                 client.close();
-                System.out.println("Disconnected from MQTT broker");
+                logger.info("Disconnected from MQTT broker");
             }
         } catch (MqttException e) {
-            e.printStackTrace();
+            logger.error("Error while disconnecting MQTT client", e);
         }
     }
 
     private MqttCallback getCallback(String topic) {
         return new MqttCallback() {
-
             @Override
-            public void deliveryComplete(IMqttDeliveryToken token) {
-                // TODO Auto-generated method stub
-                logger.warn("Connection lost: ");
-                // Attempt to reconnect
+            public void connectionLost(Throwable cause) {
+                logger.warn("Connection lost: " + cause.getMessage());
+                // Attempt reconnect
                 connectAndSubscribe(topic);
             }
 
             @Override
-            public void connectionLost(Throwable cause) {
-                // TODO Auto-generated method stub
-                throw new UnsupportedOperationException("Unimplemented method 'connectionLost'");
+            public void messageArrived(String topic, MqttMessage message) {
+                long receivedAt = System.nanoTime();
+                logger.info("Message arrived. Topic: " + topic + " Size: " + message.getPayload().length + " bytes at "
+                        + receivedAt);
             }
 
             @Override
-            public void messageArrived(String topic, MqttMessage message) throws Exception {
-                // TODO Auto-generated method stub
-                logger.info("Message arrived. Topic: " + topic + " Message: " + new String(message.getPayload()));
+            public void deliveryComplete(IMqttDeliveryToken token) {
+                logger.debug("Delivery complete for token: " + token.getMessageId());
             }
         };
     }

@@ -1,27 +1,22 @@
 package org.acme.mqtt;
 
-import java.io.ByteArrayOutputStream;
-import java.io.ObjectOutputStream;
-import java.util.Map;
-
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.common.serialization.Serializer;
+
+import java.util.Map;
 
 public class MqttSendMessageSerializer implements Serializer<MqttSendMessage> {
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     @Override
     public void configure(Map<String, ?> configs, boolean isKey) {
-        // No additional configuration needed
     }
 
     @Override
     public byte[] serialize(String topic, MqttSendMessage data) {
         try {
-            ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-            ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);
-            objectOutputStream.writeObject(data);
-            objectOutputStream.flush();
-            objectOutputStream.close();
-            return byteArrayOutputStream.toByteArray();
+            return objectMapper.writeValueAsBytes(data);
         } catch (Exception e) {
             e.printStackTrace();
             return null;
@@ -30,6 +25,5 @@ public class MqttSendMessageSerializer implements Serializer<MqttSendMessage> {
 
     @Override
     public void close() {
-        // No resources to close
     }
 }

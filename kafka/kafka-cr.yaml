@@ -4,10 +4,26 @@ metadata:
   name: my-cluster
   namespace: kafka
 spec:
-  entityOperator:
-    topicOperator: {}
-    userOperator: {}
   kafka:
+    version: 3.9.0
+    replicas: 6
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+      - name: external
+        port: 9094
+        type: route
+        tls: true
+        authentication:
+          type: scram-sha-512
+    authorization:
+      type: simple
     config:
       offsets.topic.replication.factor: 3
       transaction.state.log.replication.factor: 3
@@ -15,44 +31,33 @@ spec:
       default.replication.factor: 3
       min.insync.replicas: 2
       inter.broker.protocol.version: '3.9'
-    authorization:
-      type: simple
-    listeners:
-      - name: plain
-        port: 9092
-        tls: false
-        type: internal
-      - name: tls
-        port: 9093
-        tls: true
-        type: internal
-      - name: external
-        port: 9094
-        type: route
-        tls: true
-        authentication:
-          type: scram-sha-512
+    storage:
+      type: persistent-claim
+      class: gp3-csi
+      size: 10Gi
+      deleteClaim: true
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:
         configMapKeyRef:
-          key: kafka-metrics-config.yml
           name: kafka-metrics
-    replicas: 6
+          key: kafka-metrics-config.yml
+
+  zookeeper:
+    replicas: 3
     storage:
-      class: gp3-csi
-      deleteClaim: true
-      size: 10Gi
-      type: persistent-claim
-    version: 3.9.0
+      type: ephemeral
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: zookeeper-metrics-config.yml
+
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+
   kafkaExporter:
     groupRegex: ".*"
     topicRegex: ".*"
-  zookeeper:
-    metricsConfig:
-      type: jmxPrometheusExporter
-      valueFrom:
-        configMapKeyRef:
-          key: zookeeper-metrics-config.yml
-          name: kafka-metrics
-    replicas: 3

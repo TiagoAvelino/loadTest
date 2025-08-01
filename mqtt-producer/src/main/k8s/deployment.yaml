@@ -1,5 +1,5 @@
-kind: Deployment
 apiVersion: apps/v1
+kind: Deployment
 metadata:
   annotations:
     app.quarkus.io/commit-id: e1be31ab83f8577c8ca38c19c3acc33bb445d9d1
@@ -17,6 +17,10 @@ spec:
       app.kubernetes.io/name: mqtt-producer
       app.kubernetes.io/version: 1.0.0-SNAPSHOT
   template:
+    metadata:
+      labels:  # ✅ This must match the selector above
+        app.kubernetes.io/name: mqtt-producer
+        app.kubernetes.io/version: 1.0.0-SNAPSHOT
     spec:
       containers:
         - name: mqtt-producer

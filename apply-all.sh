@@ -6,7 +6,6 @@ namespace="kafka"
 
 # 1. OpenTelemetry setup
 # Try to create the project; if it already exists, switch to it.
-oc new-project openshift-tempo-operator || oc project openshift-tempo-operator
 oc apply -f opentelemetry/collector.yaml -n openshift-tempo-operator
 
 # If you have a separate 'minio' project for storage:
@@ -15,13 +14,19 @@ oc apply -f opentelemetry/minio.yaml -n minio
 
 # Back to tempo operator project for any secrets and Tempo itself
 oc project openshift-tempo-operator
-oc apply -f secret-minio.yaml -n openshift-tempo-operator
-oc apply -f tempo.yaml -n openshift-tempo-operator
+oc apply -f opentelemetry/secret-tempo.yaml -n openshift-tempo-operator
+oc apply -f opentelemetry/tempo.yaml -n openshift-tempo-operator
 
 # 2. Kafka user secrets
 # Ensure the kafka namespace exists or switch to it
 oc new-project "$namespace" || oc project "$namespace"
 
+oc apply -f kafka/kafka-metrics-cm.yaml  -n "$namespace"
+oc apply -f kafka/kafka-cr.yaml -n "$namespace"
+oc apply -f kafka/kafka-topic.yaml -n "$namespace"
+oc apply -f kafka/kafka-topic-push.yaml -n "$namespace"
+oc apply -f kafka/kafka-user.yaml
+oc apply -f kafka/kafka-user-password.yaml
 # Create/update a basic username/password secret
 oc create secret generic kafka-auth \
   --from-literal=username=redhat-user \
@@ -57,3 +62,4 @@ for comp in mqtt-producer mqtt-server cons-kafka-prod-kafka cons-kafka-prod-mqtt
     oc apply -f "$svc_path" -n "$namespace"
   fi
 done
+oc expose svc/mqtt-producer
