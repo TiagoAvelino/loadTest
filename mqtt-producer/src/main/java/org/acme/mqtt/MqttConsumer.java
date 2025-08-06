@@ -46,7 +46,7 @@ public class MqttConsumer {
             options.setCleanSession(true);
 
             client.connect(options);
-            LOGGER.info("Connected to MQTT broker for consuming");
+            LOGGER.info("Connect to MQTT broker for consuming");
 
             client.subscribe("mqtt-message-in/1/2/app/test/push", (topic, message) -> {
                 try {

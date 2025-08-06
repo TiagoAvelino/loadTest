@@ -23,7 +23,7 @@ var i = 0;
         });
         const randomNum = Math.floor(Math.random() * 50001);
         const headers = { 'Content-Type': 'application/json','Accept':'*/*' };
-        const url = `http://mqtt-producer-kafka.apps.tiago-cluster.sandbox1900.opentlc.com/mqtt/send?topic=mqtt-message-in/${randomNum}/2/app/test`;
+        const url = `http://mqtt-producer-kafka.apps.tiago-cluster.sandbox2099.opentlc.com/mqtt/send?topic=mqtt-message-in/${randomNum}/2/app/test`;
         const res = http.post(url, payload, { headers });
         check(res, {
             'Post status is 200': (r) => res.status === 200

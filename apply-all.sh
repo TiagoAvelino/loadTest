@@ -63,3 +63,13 @@ for comp in mqtt-producer mqtt-server cons-kafka-prod-kafka cons-kafka-prod-mqtt
   fi
 done
 oc expose svc/mqtt-producer
+
+# 4. Install k6 operator
+echo "Installing k6 operator..."
+curl -s https://raw.githubusercontent.com/grafana/k6-operator/main/bundle.yaml | kubectl apply -f -
+
+# 5. Create ConfigMap for k6 tests
+echo "Creating ConfigMap for k6 load test..."
+oc project k6-operator-system
+cd k6
+oc create configmap k6-api-test --from-file load-tests.js
