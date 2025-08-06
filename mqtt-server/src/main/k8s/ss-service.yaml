@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mqtt-server-headless
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: mqtt-server
+spec:
+  clusterIP: None  # <== HEADLESS
+  selector:
+    app.kubernetes.io/name: mqtt-server
+  ports:
+    - name: mqtt
+      port: 1883
+      targetPort: 1883
+    - name: mqtt-ws
+      port: 8090
+      targetPort: 8090
+    - name: http
+      port: 8080
+      targetPort: 8080

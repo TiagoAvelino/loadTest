@@ -6,6 +6,7 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jboss.logging.Logger;
 
 import jakarta.annotation.PreDestroy;
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 
 @ApplicationScoped
@@ -13,11 +14,22 @@ public class MqttClientService {
 
     private IMqttClient client;
 
-    @ConfigProperty(name = "quarkus.openshift.env.vars.service")
+    @ConfigProperty(name = "POD_NAME")
+    String podName;
+
     private String broker;
 
     private volatile boolean connecting;
     private static final Logger logger = Logger.getLogger(MqttClientService.class);
+
+    @PostConstruct
+    void configureBroker() {
+        int index = extractOrdinal(podName);
+        logger.info("Resolved index: " + index);
+
+        broker = "tcp://mqtt-server-" + index + ".mqtt-server-headless.kafka.svc.cluster.local:1883";
+        logger.info("Resolved broker address: " + broker);
+    }
 
     public void init(String topic) {
         connectAndSubscribe(topic);
@@ -104,7 +116,6 @@ public class MqttClientService {
             @Override
             public void connectionLost(Throwable cause) {
                 logger.warn("Connection lost: " + cause.getMessage());
-                // Attempt reconnect
                 connectAndSubscribe(topic);
             }
 
@@ -120,5 +131,14 @@ public class MqttClientService {
                 logger.debug("Delivery complete for token: " + token.getMessageId());
             }
         };
+    }
+
+    private int extractOrdinal(String podName) {
+        try {
+            return Integer.parseInt(podName.replaceAll(".*-(\\d+)$", "$1"));
+        } catch (Exception e) {
+            logger.warn("Could not extract ordinal from pod name '" + podName + "', defaulting to 0");
+            return 0;
+        }
     }
 }

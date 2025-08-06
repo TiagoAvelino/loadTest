@@ -25,10 +25,12 @@ import jakarta.inject.Inject;
 @RegisterForReflection
 @ApplicationScoped
 public class MqttConsumer {
-    @ConfigProperty(name = "quarkus.openshift.env.vars.service")
-    private String broker;
 
     private static final Logger LOGGER = Logger.getLogger(MqttConsumer.class);
+
+    @ConfigProperty(name = "POD_NAME")
+    String podName;
+
     private IMqttClient client;
 
     @Inject
@@ -36,34 +38,55 @@ public class MqttConsumer {
 
     public void onStart(@Observes StartupEvent ev) {
         LOGGER.info("Starting MQTT Consumer Service...");
+        String brokerUrl = resolveBrokerUrlFromPodName(podName);
+        LOGGER.info("Resolved MQTT broker URL: " + brokerUrl);
+
         init();
     }
 
     public void init() {
         try {
-            client = new MqttClient(broker, "user", new MemoryPersistence());
+            String brokerUrl = resolveBrokerUrlFromPodName(podName);
+            LOGGER.info("Resolved MQTT broker URL: " + brokerUrl);
+
+            client = new MqttClient(brokerUrl, MqttClient.generateClientId(), new MemoryPersistence());
             MqttConnectOptions options = new MqttConnectOptions();
             options.setCleanSession(true);
 
             client.connect(options);
-            LOGGER.info("Connect to MQTT broker for consuming");
+            LOGGER.info("Connected to MQTT broker for consuming");
 
             client.subscribe("mqtt-message-in/1/2/app/test/push", (topic, message) -> {
                 try {
-                    LOGGER.info("Received message on topic-MOBILE: " + topic);
+                    LOGGER.info("Received message on topic: " + topic);
                     MqttSendMessage receivedMessage = deserialize(message.getPayload());
                     processMessage(receivedMessage);
                 } catch (Exception e) {
                     LOGGER.error("Error processing message from topic: " + topic, e);
                 }
             });
+
         } catch (MqttException e) {
             LOGGER.error("Failed to connect or subscribe to MQTT broker", e);
         }
     }
 
+    private String resolveBrokerUrlFromPodName(String podName) {
+        int index = extractOrdinal(podName);
+        return "tcp://mqtt-server-" + index + ".mqtt-server-headless.kafka.svc.cluster.local:1883";
+    }
+
+    private int extractOrdinal(String name) {
+        try {
+            return Integer.parseInt(name.replaceAll(".*-(\\d+)$", "$1"));
+        } catch (Exception e) {
+            LOGGER.warn("Could not extract pod index from name: " + name + ", defaulting to 0");
+            return 0;
+        }
+    }
+
     private void processMessage(MqttSendMessage message) {
-        LOGGER.info("Message received:" + message.getMessage());
+        LOGGER.info("Message received: " + message.getMessage());
     }
 
     private MqttSendMessage deserialize(byte[] data) {
