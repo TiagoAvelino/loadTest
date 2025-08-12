@@ -72,4 +72,4 @@ curl -s https://raw.githubusercontent.com/grafana/k6-operator/main/bundle.yaml |
 echo "Creating ConfigMap for k6 load test..."
 oc project k6-operator-system
 cd k6
-oc create configmap k6-api-test --from-file load-tests.js
+oc create configmap k6-api-test --from-file load-test.js
