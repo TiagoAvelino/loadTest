@@ -31,6 +31,8 @@ public class MqttConsumer {
     @ConfigProperty(name = "POD_NAME")
     String podName;
 
+    @ConfigProperty(name = "SERVICE")
+    String service;
     private IMqttClient client;
 
     @Inject
@@ -73,7 +75,7 @@ public class MqttConsumer {
 
     private String resolveBrokerUrlFromPodName(String podName) {
         int index = extractOrdinal(podName);
-        return "tcp://mqtt-server-" + index + ".mqtt-server-headless.kafka.svc.cluster.local:1883";
+        return "tcp://mqtt-server-" + index + service;
     }
 
     private int extractOrdinal(String name) {

@@ -17,6 +17,9 @@ public class MqttClientService {
     @ConfigProperty(name = "POD_NAME")
     String podName;
 
+    @ConfigProperty(name = "SERVICE")
+    String service;
+
     private String broker;
 
     private volatile boolean connecting;
@@ -27,7 +30,7 @@ public class MqttClientService {
         int index = extractOrdinal(podName);
         logger.info("Resolved index: " + index);
 
-        broker = "tcp://mqtt-server-" + index + ".mqtt-server-headless.kafka.svc.cluster.local:1883";
+        broker = "tcp://mqtt-server-" + index + service;
         logger.info("Resolved broker address: " + broker);
     }
 
