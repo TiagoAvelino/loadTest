@@ -37,6 +37,8 @@ spec:
           env:
             - name: JAVA_APP_JAR
               value: /deployments/quarkus-run.jar
+            - name: SERVICE
+              value: .mqtt-server-headless.kafka.svc.cluster.local:1883
             - name: POD_NAME
               valueFrom:
                 fieldRef:

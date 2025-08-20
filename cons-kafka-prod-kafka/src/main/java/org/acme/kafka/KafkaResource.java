@@ -1,22 +1,23 @@
-package org.acme.kafka;
+// package org.acme.kafka;
 
-import org.acme.mqtt.MqttSendMessage;
-import org.eclipse.microprofile.reactive.messaging.Incoming;
-import org.eclipse.microprofile.reactive.messaging.Outgoing;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+// import java.util.concurrent.CompletableFuture;
+// import java.util.concurrent.CompletionStage;
 
-import jakarta.enterprise.context.ApplicationScoped;
+// import org.acme.tracing.messageparams.MqttSendMessage;
+// import org.eclipse.microprofile.reactive.messaging.Incoming;
+// import org.eclipse.microprofile.reactive.messaging.Outgoing;
 
-@ApplicationScoped
-public class KafkaResource {
+// import jakarta.enterprise.context.ApplicationScoped;
 
-    @Incoming("app.test")
-    @Outgoing("app.test.push")
-    public CompletionStage<MqttSendMessage> process(MqttSendMessage message) {
-        return CompletableFuture.supplyAsync(() -> {
-            message.setHost("cons-kafka-prod-kafka");
-            return message;
-        });
-    }
-}
+// @ApplicationScoped
+// public class KafkaResource {
+
+// @Incoming("app.test")
+// @Outgoing("app.test.push")
+// public CompletionStage<MqttSendMessage> process(MqttSendMessage message) {
+// return CompletableFuture.supplyAsync(() -> {
+// message.setHost("cons-kafka-prod-kafka");
+// return message;
+// });
+// }
+// }

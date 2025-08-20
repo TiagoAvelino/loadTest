@@ -1,63 +1,83 @@
+# ------------------------------
+# 1) Kafka (cluster-level config)
+# ------------------------------
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
   name: my-cluster
   namespace: kafka
+  annotations:
+    strimzi.io/kraft: enabled
+    strimzi.io/node-pools: enabled
 spec:
   kafka:
-    version: 3.9.0
-    replicas: 6
+    version: 4.0.0
+    authorization:
+      type: simple
     listeners:
       - name: plain
-        port: 9092
         type: internal
+        port: 9092
         tls: false
       - name: tls
-        port: 9093
         type: internal
+        port: 9093
         tls: true
       - name: external
+        type: route        # OpenShift
         port: 9094
-        type: route
         tls: true
         authentication:
           type: scram-sha-512
-    authorization:
-      type: simple
+    # NOTE: with node-pools enabled, replicas/storage are defined in KafkaNodePool, not here.
     config:
+      default.replication.factor: 3
+      min.insync.replicas: 2
       offsets.topic.replication.factor: 3
       transaction.state.log.replication.factor: 3
       transaction.state.log.min.isr: 2
-      default.replication.factor: 3
-      min.insync.replicas: 2
-      inter.broker.protocol.version: '3.9'
-    storage:
-      type: persistent-claim
-      class: gp3-csi
-      size: 10Gi
-      deleteClaim: true
-    metricsConfig:
-      type: jmxPrometheusExporter
-      valueFrom:
-        configMapKeyRef:
-          name: kafka-metrics
-          key: kafka-metrics-config.yml
-
-  zookeeper:
-    replicas: 3
-    storage:
-      type: ephemeral
-    metricsConfig:
-      type: jmxPrometheusExporter
-      valueFrom:
-        configMapKeyRef:
-          name: kafka-metrics
-          key: zookeeper-metrics-config.yml
-
   entityOperator:
     topicOperator: {}
     userOperator: {}
 
-  kafkaExporter:
-    groupRegex: ".*"
-    topicRegex: ".*"
+---
+# ------------------------------------
+# 2) Controller node pool (required)
+# ------------------------------------
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: my-cluster-controllers
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: my-cluster
+spec:
+  replicas: 3
+  roles:
+    - controller
+  storage:
+    type: persistent-claim
+    class: gp3-csi
+    size: 10Gi
+    deleteClaim: true
+
+---
+# ------------------------------------
+# 3) Broker node pool
+# ------------------------------------
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: my-cluster-brokers
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: my-cluster
+spec:
+  replicas: 6
+  roles:
+    - broker
+  storage:
+    type: persistent-claim
+    class: gp3-csi
+    size: 10Gi
+    deleteClaim: true

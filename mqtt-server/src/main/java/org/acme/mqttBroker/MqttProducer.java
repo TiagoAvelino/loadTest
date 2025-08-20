@@ -1,6 +1,6 @@
 package org.acme.mqttBroker;
 
-import org.acme.mqtt.MqttSendMessage;
+import org.acme.tracing.messageparams.MqttSendMessage;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.paho.client.mqttv3.IMqttClient;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;

@@ -63,7 +63,7 @@ spec:
 
     exporters:
       otlp/dev:
-        endpoint: tempo-simplest-gateway.openshift-tempo-operator.svc.cluster.local:8090
+        endpoint: http://tempo-simplest-gateway.openshift-tempo-operator.svc.cluster.local:8090
         tls:
           insecure: false
           ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"

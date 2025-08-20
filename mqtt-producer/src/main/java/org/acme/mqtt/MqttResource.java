@@ -2,6 +2,8 @@ package org.acme.mqtt;
 
 import java.util.Map;
 
+import org.acme.tracing.messageparams.MqttSendMessage;
+
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;

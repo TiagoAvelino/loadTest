@@ -1,12 +1,30 @@
 package org.acme.mqtt;
 
+import org.acme.tracing.TracingBridge;
+import org.acme.tracing.messageparams.MqttSendMessage;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.eclipse.paho.client.mqttv3.*;
+import org.eclipse.paho.client.mqttv3.IMqttClient;
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
+import org.eclipse.paho.client.mqttv3.IMqttToken;
+import org.eclipse.paho.client.mqttv3.MqttCallback;
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.MqttException;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jboss.logging.Logger;
 
-import jakarta.annotation.PreDestroy;
+// OpenTelemetry
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 
 @ApplicationScoped
@@ -24,6 +42,10 @@ public class MqttClientService {
 
     private volatile boolean connecting;
     private static final Logger logger = Logger.getLogger(MqttClientService.class);
+
+    // ---- OpenTelemetry ----
+    private static final OpenTelemetry OTEL = GlobalOpenTelemetry.get();
+    private static final Tracer TRACER = OTEL.getTracer("org.acme.mqtt.publisher", "1.0.0");
 
     @PostConstruct
     void configureBroker() {
@@ -66,22 +88,50 @@ public class MqttClientService {
     }
 
     public void publishMessage(String topic, MqttSendMessage payload) {
-        try {
+        // Create a PRODUCER span to represent this publish operation.
+        Span span = TRACER.spanBuilder("mqtt.publish")
+                .setSpanKind(SpanKind.PRODUCER)
+                .setAttribute("messaging.system", "mqtt")
+                .setAttribute("messaging.operation", "publish")
+                .setAttribute("messaging.destination", topic)
+                .setAttribute("messaging.destination_kind", "topic")
+                .setAttribute("messaging.protocol", "mqtt")
+                .setAttribute("messaging.protocol_version", "3.1.1")
+                .setAttribute("net.peer.name", brokerUrlHost(broker))
+                .setAttribute("net.peer.port", brokerUrlPort(broker))
+                .startSpan();
+
+        try (Scope s = span.makeCurrent()) {
             ensureConnected(topic);
+
+            // Inject context so downstream services can continue the trace.
+            TracingBridge.injectIntoMessage(payload);
 
             byte[] data = payload.serialize();
             logger.infof("Publishing message. Size: %d bytes", data.length);
 
+            // (Optional) annotate payload size
+            span.setAllAttributes(Attributes.of(
+                    io.opentelemetry.api.common.AttributeKey.longKey("message.payload_size_bytes"), (long) data.length,
+                    io.opentelemetry.api.common.AttributeKey.stringKey("app.pod_name"), podName,
+                    io.opentelemetry.api.common.AttributeKey.stringKey("app.service"), service));
+
             MqttMessage message = new MqttMessage(data);
-            message.setQos(0); // optionally test with 0 for faster throughput
+            message.setQos(0); // test with 0 for throughput; bump to 1/2 if you need delivery guarantees
 
             long start = System.nanoTime();
             client.publish(topic, message);
             long end = System.nanoTime();
 
+            span.setStatus(StatusCode.OK);
+            span.setAttribute("message.publish_latency_ms", (end - start) / 1_000_000.0);
             logger.infof("Published in %.2f ms", (end - start) / 1_000_000.0);
         } catch (MqttException | InterruptedException e) {
+            span.recordException(e);
+            span.setStatus(StatusCode.ERROR, e.getMessage());
             logger.error("Error while publishing message to MQTT broker: ", e);
+        } finally {
+            span.end();
         }
     }
 
@@ -92,7 +142,7 @@ public class MqttClientService {
 
         int retries = 0;
         while (connecting && retries < 50) {
-            Thread.sleep(10); // reduced from 100ms to 10ms for quicker readiness
+            Thread.sleep(10);
             retries++;
         }
 
@@ -127,6 +177,8 @@ public class MqttClientService {
                 long receivedAt = System.nanoTime();
                 logger.info("Message arrived. Topic: " + topic + " Size: " + message.getPayload().length + " bytes at "
                         + receivedAt);
+                // If this service also consumes its own publishes, you could extract and create
+                // a span here.
             }
 
             @Override
@@ -142,6 +194,26 @@ public class MqttClientService {
         } catch (Exception e) {
             logger.warn("Could not extract ordinal from pod name '" + podName + "', defaulting to 0");
             return 0;
+        }
+    }
+
+    private static String brokerUrlHost(String brokerUrl) {
+        try {
+            String u = brokerUrl.replace("tcp://", "");
+            int i = u.indexOf(':');
+            return i > 0 ? u.substring(0, i) : u;
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
+    private static long brokerUrlPort(String brokerUrl) {
+        try {
+            String u = brokerUrl.replace("tcp://", "");
+            int i = u.indexOf(':');
+            return i > 0 ? Long.parseLong(u.substring(i + 1)) : -1;
+        } catch (Exception e) {
+            return -1;
         }
     }
 }
