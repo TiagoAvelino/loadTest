@@ -7,7 +7,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 
 import org.acme.kafka.KafkaSend;
-import org.acme.tracing.TracingBridge; // <-- shared lib used to extract/inject trace context
+import org.acme.tracing.TracingBridge;
 import org.acme.tracing.messageparams.MqttSendMessage;
 import org.eclipse.microprofile.context.ManagedExecutor;
 import org.eclipse.paho.client.mqttv3.IMqttClient;
@@ -28,6 +28,7 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 @RegisterForReflection
 @ApplicationScoped
@@ -37,52 +38,78 @@ public class MqttConsumerService {
 
     @Inject
     Tracer tracer;
-
     @Inject
     KafkaSend producer;
-
     @Inject
     ManagedExecutor managedExecutor;
 
     private IMqttClient client;
+    private volatile String localHostIp = "unknown";
+
+    // ---- Tunables (env-friendly) ------------------------------------------------
+    @ConfigProperty(name = "mqtt.url", defaultValue = "tcp://localhost:1883")
+    String mqttUrl;
+
+    @ConfigProperty(name = "mqtt.topic.filter", defaultValue = "mqtt-message-in/+/+/app/test/pull")
+    String topicFilter;
+
+    @ConfigProperty(name = "mqtt.subscribe.qos", defaultValue = "0")
+    int subscribeQos;
+
+    @ConfigProperty(name = "mqtt.cleanSession", defaultValue = "false")
+    boolean cleanSession;
+
+    @ConfigProperty(name = "mqtt.maxInflight", defaultValue = "1024")
+    int maxInflight;
+
+    // Replace outgoing Kafka topic suffix ".pull" -> ".push"
+    @ConfigProperty(name = "mqtt.forward.replacePullWithPush", defaultValue = "true")
+    boolean replacePullWithPush;
+    // -----------------------------------------------------------------------------
 
     @Startup(20)
     public void init() {
-        Span connectSpan = tracer.spanBuilder("mqtt.connect")
-                .setSpanKind(SpanKind.CLIENT)
-                .startSpan();
+        try {
+            localHostIp = InetAddress.getLocalHost().getHostAddress();
+        } catch (UnknownHostException e) {
+            LOGGER.warn("Failed to resolve host IP at startup", e);
+        }
+
+        Span connectSpan = tracer.spanBuilder("mqtt.connect").setSpanKind(SpanKind.CLIENT).startSpan();
         try (Scope s = connectSpan.makeCurrent()) {
             connectSpan.setAttribute("messaging.system", "mqtt");
-            connectSpan.setAttribute("messaging.url", "tcp://localhost:1883");
-            LOGGER.info("Connecting to MQTT broker for consuming");
+            connectSpan.setAttribute("messaging.url", mqttUrl);
+            LOGGER.infof("Connecting MQTT consumer to %s (filter=%s, qos=%d)", mqttUrl, topicFilter, subscribeQos);
 
-            client = new MqttClient("tcp://localhost:1883", "consumer-" + InetAddress.getLocalHost().getHostName(),
+            client = new MqttClient(mqttUrl, "consumer-" + InetAddress.getLocalHost().getHostName(),
                     new MemoryPersistence());
-            MqttConnectOptions options = new MqttConnectOptions();
-            options.setCleanSession(true);
-            client.connect(options);
 
-            LOGGER.info("Connected to MQTT broker");
+            MqttConnectOptions options = new MqttConnectOptions();
+            options.setAutomaticReconnect(true);
+            options.setCleanSession(cleanSession);
+            options.setMaxInflight(maxInflight);
+            options.setKeepAliveInterval(30);
+            options.setConnectionTimeout(5);
+
+            client.connect(options);
             connectSpan.setStatus(StatusCode.OK);
         } catch (Exception e) {
             connectSpan.recordException(e);
             connectSpan.setStatus(StatusCode.ERROR, "Connection failed");
             LOGGER.error("Failed to connect to MQTT broker", e);
+            return;
         } finally {
             connectSpan.end();
         }
 
-        // subscribe (outside the connect try so errors here are captured separately)
-        Span subSpan = tracer.spanBuilder("mqtt.subscribe")
-                .setSpanKind(SpanKind.CLIENT)
-                .startSpan();
+        Span subSpan = tracer.spanBuilder("mqtt.subscribe").setSpanKind(SpanKind.CLIENT).startSpan();
         try (Scope ss = subSpan.makeCurrent()) {
             subSpan.setAttribute("messaging.system", "mqtt");
             subSpan.setAttribute("messaging.destination_kind", "topic");
-            subSpan.setAttribute("messaging.destination", "mqtt-message-in/+/+/app/test/pull");
+            subSpan.setAttribute("messaging.destination", topicFilter);
 
-            client.subscribe("mqtt-message-in/+/+/app/test/pull", this::onMessage);
-            LOGGER.info("Subscribed to all topics (mqtt-message-in/+/+/app/test/pull)");
+            client.subscribe(topicFilter, subscribeQos, this::onMessage);
+            LOGGER.infof("Subscribed to '%s' with QoS=%d", topicFilter, subscribeQos);
             subSpan.setStatus(StatusCode.OK);
         } catch (MqttException e) {
             subSpan.recordException(e);
@@ -93,13 +120,15 @@ public class MqttConsumerService {
         }
     }
 
+    // Keep callback thin; do real work on the executor
     private void onMessage(String topic, org.eclipse.paho.client.mqttv3.MqttMessage mqttMessage) {
-        // 0) Extract upstream context from the MQTT payload so THIS SERVICE continues
-        byte[] payload = mqttMessage.getPayload();
+        final byte[] payload = mqttMessage.getPayload();
+        managedExecutor.execute(() -> handleMessage(topic, payload));
+    }
+
+    private void handleMessage(String topic, byte[] payload) {
         Context extractedParent = TracingBridge.extractFromMessage(payload);
 
-        // 1) Create a CONSUMER span *with the extracted parent* (keeps everything in
-        // one trace)
         Span receiveSpan = tracer.spanBuilder("mqtt.receive")
                 .setSpanKind(SpanKind.CONSUMER)
                 .setParent(extractedParent)
@@ -112,26 +141,20 @@ public class MqttConsumerService {
 
         try (Scope rs = receiveSpan.makeCurrent()) {
             if (topic != null && topic.endsWith("/push")) {
-                LOGGER.debugf("Skipping push-topic message: %s", topic);
                 receiveSpan.setStatus(StatusCode.OK);
                 return;
             }
 
-            // 2) Deserialize the domain message (still under the receive span)
             MqttSendMessage received = deserialize(payload);
-            if (received == null) {
+            if (received == null)
                 throw new IllegalStateException("Deserialized message was null");
-            }
 
-            // (Optional) annotate this host/IP in the domain object
-            received = attachHostIp(received);
+            // cache IP set
+            received.setHost(localHostIp);
 
-            // 3) Business processing as a child INTERNAL span
-            Span workSpan = tracer.spanBuilder("mqtt.businessLogic")
-                    .setSpanKind(SpanKind.INTERNAL)
-                    .startSpan();
+            // Business work
+            Span workSpan = tracer.spanBuilder("mqtt.businessLogic").setSpanKind(SpanKind.INTERNAL).startSpan();
             try (Scope ws = workSpan.makeCurrent()) {
-                workSpan.setAttribute("app.stage", "processMessage");
                 processMessage(received);
                 workSpan.setStatus(StatusCode.OK);
             } catch (Exception e) {
@@ -142,13 +165,15 @@ public class MqttConsumerService {
                 workSpan.end();
             }
 
-            // 4) Re-inject context into the message before forwarding (keeps the same trace
-            // downstream)
+            // re-inject trace context
             TracingBridge.injectIntoMessage(received);
 
-            // 5) Forward to Kafka with a PRODUCER span (child of the receive span)
+            // Transform destination + key
             String key = transformKey(topic);
             String dest = transformTopic(topic);
+            if (replacePullWithPush && dest.endsWith(".pull")) {
+                dest = dest.substring(0, dest.length() - 5) + ".push";
+            }
 
             Span fwdSpan = tracer.spanBuilder("mqtt.forward_to_kafka")
                     .setSpanKind(SpanKind.PRODUCER)
@@ -157,14 +182,16 @@ public class MqttConsumerService {
                     .setAttribute("messaging.destination", dest)
                     .setAttribute("messaging.kafka.message_key", key)
                     .startSpan();
+
             try (Scope fs = fwdSpan.makeCurrent()) {
-                // If your KafkaSend supports headers, you can also inject into headers there.
-                // Here we at least ensured the payload carries traceparent/tracestate forward.
+                // Send directly (we're already off the callback thread). No join/flush here.
+                LOGGER.debugf("Forwarding to Kafka topic='%s' key='%s'", dest, key);
                 producer.sendMessage(received, key, dest);
                 fwdSpan.setStatus(StatusCode.OK);
             } catch (Exception e) {
                 fwdSpan.recordException(e);
                 fwdSpan.setStatus(StatusCode.ERROR, "Forwarding failed");
+                LOGGER.errorf(e, "Kafka send failed (topic=%s, key=%s)", dest, key);
                 throw e;
             } finally {
                 fwdSpan.end();
@@ -181,17 +208,7 @@ public class MqttConsumerService {
     }
 
     private void processMessage(MqttSendMessage msg) {
-        LOGGER.infof("Processing message: %s (host=%s)", msg.getMessage(), msg.getHost());
-    }
-
-    private MqttSendMessage attachHostIp(MqttSendMessage msg) {
-        try {
-            String ip = InetAddress.getLocalHost().getHostAddress();
-            msg.setHost(ip);
-        } catch (UnknownHostException e) {
-            LOGGER.warn("Failed to retrieve host IP", e);
-        }
-        return msg;
+        LOGGER.debugf("Processing message: %s (host=%s)", msg.getMessage(), msg.getHost());
     }
 
     private MqttSendMessage deserialize(byte[] data) {
@@ -207,9 +224,7 @@ public class MqttConsumerService {
 
     @PreDestroy
     public void cleanup() {
-        Span span = tracer.spanBuilder("mqtt.disconnect")
-                .setSpanKind(SpanKind.CLIENT)
-                .startSpan();
+        Span span = tracer.spanBuilder("mqtt.disconnect").setSpanKind(SpanKind.CLIENT).startSpan();
         try (Scope s = span.makeCurrent()) {
             if (client != null && client.isConnected()) {
                 client.disconnect();
@@ -226,21 +241,30 @@ public class MqttConsumerService {
         }
     }
 
+    // Faster split-less transforms
     public static String transformKey(String mqttTopic) {
-        if (mqttTopic == null || mqttTopic.split("/").length < 4) {
-            throw new IllegalArgumentException("Invalid input format: The string must have at least 3 '/' characters.");
-        }
-        String[] parts = mqttTopic.split("/", 4);
-        String beforeThirdSlash = String.join("/", parts[0], parts[1], parts[2]);
-        return beforeThirdSlash.replace("/", ".");
+        int first = mqttTopic.indexOf('/');
+        if (first < 0)
+            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
+        int second = mqttTopic.indexOf('/', first + 1);
+        if (second < 0)
+            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
+        int third = mqttTopic.indexOf('/', second + 1);
+        if (third < 0)
+            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
+        return mqttTopic.substring(0, third).replace('/', '.'); // e.g., mqtt-message-in.1.2
     }
 
     public static String transformTopic(String mqttTopic) {
-        if (mqttTopic == null || mqttTopic.split("/").length < 4) {
-            throw new IllegalArgumentException("Invalid input format: The string must have at least 3 '/' characters.");
-        }
-        String[] parts = mqttTopic.split("/", 4);
-        String afterThirdSlash = parts[3];
-        return afterThirdSlash.replace("/", ".");
+        int first = mqttTopic.indexOf('/');
+        if (first < 0)
+            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
+        int second = mqttTopic.indexOf('/', first + 1);
+        if (second < 0)
+            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
+        int third = mqttTopic.indexOf('/', second + 1);
+        if (third < 0)
+            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
+        return mqttTopic.substring(third + 1).replace('/', '.'); // e.g., app.test.pull
     }
 }
