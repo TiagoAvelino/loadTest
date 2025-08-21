@@ -23,6 +23,8 @@ spec:
         type: internal
         port: 9093
         tls: true
+        authentication:
+          type: scram-sha-512
       - name: external
         type: route        # OpenShift
         port: 9094
@@ -73,7 +75,7 @@ metadata:
   labels:
     strimzi.io/cluster: my-cluster
 spec:
-  replicas: 6
+  replicas: 3
   roles:
     - broker
   storage:

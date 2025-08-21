@@ -23,7 +23,7 @@ public class KafkaMessageConsumer {
     @Inject
     Tracer tracer;
 
-    @Incoming("app.test")
+    @Incoming("app.test.pull")
     public MqttSendMessage consumeMessages(ConsumerRecord<String, MqttSendMessage> record) {
         final String key = record.key();
         final String topic = record.topic();
@@ -44,7 +44,7 @@ public class KafkaMessageConsumer {
 
             // 3) Forward with the shared producer (which injects headers); stays in same
             // trace
-            String topicEnvio = topic + ".push";
+            String topicEnvio = topic.replace(".pull", ".push");
             kafkaSend.sendMessage(message, key, topicEnvio);
 
             receiveSpan.setStatus(StatusCode.OK);

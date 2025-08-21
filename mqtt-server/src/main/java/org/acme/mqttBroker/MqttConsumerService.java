@@ -79,10 +79,10 @@ public class MqttConsumerService {
         try (Scope ss = subSpan.makeCurrent()) {
             subSpan.setAttribute("messaging.system", "mqtt");
             subSpan.setAttribute("messaging.destination_kind", "topic");
-            subSpan.setAttribute("messaging.destination", "#");
+            subSpan.setAttribute("messaging.destination", "mqtt-message-in/+/+/app/test/pull");
 
-            client.subscribe("#", this::onMessage);
-            LOGGER.info("Subscribed to all topics (#)");
+            client.subscribe("mqtt-message-in/+/+/app/test/pull", this::onMessage);
+            LOGGER.info("Subscribed to all topics (mqtt-message-in/+/+/app/test/pull)");
             subSpan.setStatus(StatusCode.OK);
         } catch (MqttException e) {
             subSpan.recordException(e);

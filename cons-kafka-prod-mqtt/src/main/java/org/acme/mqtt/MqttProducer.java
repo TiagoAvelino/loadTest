@@ -2,15 +2,16 @@ package org.acme.mqtt;
 
 import java.time.temporal.ChronoUnit;
 
-import org.acme.health.IpHealthChecker;
 import org.acme.tracing.TracingBridge;
 import org.acme.tracing.messageparams.MqttSendMessage;
+
 import org.eclipse.microprofile.faulttolerance.Timeout;
 import org.eclipse.microprofile.faulttolerance.exceptions.TimeoutException;
+
+import org.eclipse.paho.client.mqttv3.IMqttClient;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
-import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
@@ -20,6 +21,7 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -29,12 +31,14 @@ public class MqttProducer {
     private static final String MQTT_BROKER_PREFIX = "tcp://";
     private static final int MQTT_DEFAULT_PORT = 1883;
 
+    // Keep the same “simple” style: connect -> publish -> disconnect
+    // Just make QoS explicit and use IMqttClient.
+    private static final int qos = 0; // 0 = fastest; change to 1/2 if you need guarantees
+
     private String topic = "";
 
     @Inject
     Tracer tracer;
-
-    private final IpHealthChecker ipHealthChecker = new IpHealthChecker();
 
     public String getTopic() {
         return this.topic;
@@ -45,20 +49,20 @@ public class MqttProducer {
     }
 
     // The method will timeout if it takes longer than 12 seconds.
-    @Timeout(value = 12, unit = ChronoUnit.SECONDS)
+    @Timeout(value = 100, unit = ChronoUnit.MILLIS)
     public void produce(MqttSendMessage mqttMes) {
-        // fall back if injection hasn’t happened yet for some reason
+        // Fall back if injection hasn’t happened yet for some reason
         if (tracer == null) {
             tracer = GlobalOpenTelemetry.getTracer("mqtt-kafka", "1.0");
         }
 
         final String brokerHost = mqttMes.getHost();
         final String brokerUrl = MQTT_BROKER_PREFIX + brokerHost + ":" + MQTT_DEFAULT_PORT;
+        final String destTopic = this.topic;
 
-        System.out.printf("Preparing to send message to topic: %s and host: %s%n", topic, brokerUrl);
+        System.out.printf("Preparing to send message to topic: %s and host: %s%n", destTopic, brokerUrl);
 
         // Ensure the payload carries the current W3C context (idempotent).
-        // Upstream already injected, but calling again is harmless.
         TracingBridge.injectIntoMessage(mqttMes);
 
         // Serialize once, reuse for both extraction and publish
@@ -67,42 +71,48 @@ public class MqttProducer {
         // Extract upstream parent from the payload to CONTINUE THE SAME TRACE
         Context parent = TracingBridge.extractFromMessage(payloadBytes);
 
-        // Child span for CONNECT (CLIENT) — no extra PRODUCER span here to avoid
-        // duplicates
+        // Child span for CONNECT (CLIENT)
         Span connectSpan = tracer.spanBuilder("mqtt.connect")
                 .setSpanKind(SpanKind.CLIENT)
                 .setParent(parent)
                 .setAttribute("messaging.system", "mqtt")
                 .setAttribute("messaging.url", brokerUrl)
                 .setAttribute("messaging.destination_kind", "topic")
-                .setAttribute("messaging.destination", topic)
+                .setAttribute("messaging.destination", destTopic)
                 .startSpan();
 
         try (Scope cs = connectSpan.makeCurrent()) {
-            MqttClient mqttClient = new MqttClient(brokerUrl, MqttClient.generateClientId(), new MemoryPersistence());
+            IMqttClient mqttClient = new MqttClient(brokerUrl, MqttClient.generateClientId(), new MemoryPersistence());
             MqttConnectOptions connectOptions = new MqttConnectOptions();
             connectOptions.setConnectionTimeout(10); // seconds
             connectOptions.setKeepAliveInterval(30);
+            connectOptions.setCleanSession(true);
+
             mqttClient.connect(connectOptions);
             connectSpan.setStatus(StatusCode.OK);
 
             // Child span for the actual publish I/O
             Span ioSpan = tracer.spanBuilder("mqtt.publish.io")
-                    .setSpanKind(SpanKind.INTERNAL)
+                    .setSpanKind(SpanKind.CLIENT)
+                    .setParent(parent)
                     .setAttribute("messaging.system", "mqtt")
                     .setAttribute("messaging.destination_kind", "topic")
-                    .setAttribute("messaging.destination", topic)
+                    .setAttribute("messaging.destination", destTopic)
                     .setAttribute("net.peer.name", brokerHost)
                     .setAttribute("net.peer.port", MQTT_DEFAULT_PORT)
+                    .setAttribute("messaging.mqtt.qos", qos)
                     .setAttribute("message.payload_size_bytes", payloadBytes != null ? payloadBytes.length : 0)
                     .startSpan();
 
             try (Scope ios = ioSpan.makeCurrent()) {
-                MqttMessage mqttMessage = new MqttMessage();
-                mqttMessage.setPayload(payloadBytes);
+                long start = System.nanoTime();
+                // Use the publish overload that sets QoS directly (no MqttMessage object
+                // needed)
+                mqttClient.publish(destTopic, payloadBytes, qos, false);
+                long end = System.nanoTime();
 
-                mqttClient.publish(topic, mqttMessage);
                 ioSpan.setStatus(StatusCode.OK);
+                ioSpan.setAttribute("message.publish_latency_ms", (end - start) / 1_000_000.0);
             } catch (Exception e) {
                 ioSpan.recordException(e);
                 ioSpan.setStatus(StatusCode.ERROR, "Publish failed");
@@ -112,6 +122,7 @@ public class MqttProducer {
             }
 
             mqttClient.disconnect();
+            mqttClient.close();
         } catch (TimeoutException e) {
             connectSpan.recordException(e);
             connectSpan.setStatus(StatusCode.ERROR, "Timeout while publishing to MQTT broker");

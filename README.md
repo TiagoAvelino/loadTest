@@ -200,7 +200,7 @@ quarkus dev
 Send a POST request to the `mqtt/send` endpoint to test the application:
 
 ```bash
-curl -X POST 'http://localhost/mqtt/send?topic=mqtt-message-in/1/2/app/test' \
+curl -X POST 'http://localhost/mqtt/send?topic=mqtt-message-in/1/2/app/test/pull' \
 -H 'Content-Type: application/json' \
 -H 'Accept: */*' \
 -d '{"message": "teste1", "jwt": "teste"}'

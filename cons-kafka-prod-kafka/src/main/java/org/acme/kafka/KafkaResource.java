@@ -12,7 +12,7 @@
 // @ApplicationScoped
 // public class KafkaResource {
 
-// @Incoming("app.test")
+// @Incoming("app.test.pull")
 // @Outgoing("app.test.push")
 // public CompletionStage<MqttSendMessage> process(MqttSendMessage message) {
 // return CompletableFuture.supplyAsync(() -> {

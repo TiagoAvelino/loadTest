@@ -3,7 +3,7 @@ kind: KafkaTopic
 metadata:
   labels:
     strimzi.io/cluster: my-cluster
-  name: app.test
+  name: app.test.pull
   namespace: kafka
 spec:
   config:
@@ -12,7 +12,7 @@ spec:
     min.insync.replicas: 1 
   partitions: 6
   replicas: 1
-  topicName: app.test
+  topicName: app.test.pull
 ---
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaTopic
