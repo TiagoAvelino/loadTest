@@ -21,6 +21,12 @@ public class MqttSendMessage implements Serializable {
     private String traceParent;
     private String traceState;
 
+    // --- Timing fields added for end-to-end measurement ---
+    // Cross-JVM comparable (based on wall clock)
+    private long sentEpochMs;
+    // Only comparable within the same JVM (for debugging/reference)
+    private long sentNano;
+
     // explicit public no-arg ctor for reflective instantiation
     public MqttSendMessage() {
     }
@@ -34,10 +40,8 @@ public class MqttSendMessage implements Serializable {
             }
             return byteArrayOutputStream.toByteArray();
         } catch (Exception e) {
-            // keep behavior, but you can switch to throwing SerializationException if you
-            // prefer
             e.printStackTrace();
-            return null;
+            return null; // keep behavior; alternatively throw a custom SerializationException
         }
     }
 }

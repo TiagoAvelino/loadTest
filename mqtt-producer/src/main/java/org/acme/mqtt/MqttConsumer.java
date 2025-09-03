@@ -23,6 +23,7 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.api.baggage.Baggage;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.quarkus.runtime.Startup;
@@ -83,8 +84,9 @@ public class MqttConsumer {
                 // 1) Extract upstream context from payload (best-effort).
                 Context extracted = TracingBridge.extractFromMessage(payload);
 
-                // 2) Create a CONSUMER span as the entrypoint for this service.
-                Span span = TRACER.spanBuilder("mqtt.receive")
+                // 2) Create the CONSUMER span as the last step in your flow.
+                // Name it exactly as requested: TRACE SAIDA.
+                Span span = TRACER.spanBuilder("TRACE SAIDA")
                         .setSpanKind(SpanKind.CONSUMER)
                         .setParent(extracted)
                         .setAttribute("messaging.system", "mqtt")
@@ -115,7 +117,40 @@ public class MqttConsumer {
                             .put("app.message.type", "MqttSendMessage")
                             .build());
 
-                    // 3) Process the message inside the span scope (child spans encouraged).
+                    // === AFTER MESSAGE PRINT (former line ~157) ===
+                    // Capture the final nano timestamp in this last step of the trace.
+                    final long saidaNano = System.nanoTime();
+                    span.setAttribute("trace.saida.nano", saidaNano);
+                    span.setAttribute("trace.saida.millis", saidaNano / 1_000_000.0);
+                    span.addEvent("TRACE_SAIDA", Attributes.of(
+                            io.opentelemetry.api.common.AttributeKey.longKey("saida.nano"), saidaNano,
+                            io.opentelemetry.api.common.AttributeKey.stringKey("app.pod_name"), podName,
+                            io.opentelemetry.api.common.AttributeKey.stringKey("app.service"), service));
+
+                    // Best-effort: compute end-to-end duration if upstream start is carried in W3C
+                    // Baggage.
+                    try {
+                        String entradaStr = Baggage.fromContext(extracted).getEntryValue("trace.entrada.nano");
+                        if (entradaStr == null) {
+                            // try a fallback key name
+                            entradaStr = Baggage.fromContext(extracted).getEntryValue("entrada.nano");
+                        }
+                        if (entradaStr != null && !entradaStr.isEmpty()) {
+                            long entradaNano = Long.parseLong(entradaStr);
+                            long e2eNs = Math.max(0L, saidaNano - entradaNano);
+                            double e2eMs = e2eNs / 1_000_000.0;
+
+                            span.setAttribute("e2e.total_time_ns", e2eNs);
+                            span.setAttribute("e2e.total_time_ms", e2eMs);
+                            LOGGER.infof("End-to-end time: %.3f ms", e2eMs);
+                        } else {
+                            LOGGER.debug("No upstream entrada timestamp found in Baggage; skipping e2e computation.");
+                        }
+                    } catch (Exception parseOrCalc) {
+                        LOGGER.debug("Failed to compute end-to-end duration from Baggage", parseOrCalc);
+                    }
+
+                    // 3) Process the message (child span for business logic).
                     processMessage(receivedMessage);
 
                     // 4) Mark success

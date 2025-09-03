@@ -20,18 +20,26 @@ public class MqttServer {
 
     private Server mqttBroker;
 
-    // Make ports tunable via env (e.g., MQTT_BROKER_PORT, MQTT_BROKER_WS_PORT)
+    // Listener config (tunable via env)
+    @ConfigProperty(name = "mqtt.broker.host", defaultValue = "0.0.0.0")
+    String host;
+
     @ConfigProperty(name = "mqtt.broker.port", defaultValue = "1883")
     int mqttPort;
+
+    // Toggle WebSocket listener entirely (disable if unused for lower latency)
+    @ConfigProperty(name = "mqtt.broker.ws.enabled", defaultValue = "false")
+    boolean wsEnabled;
 
     @ConfigProperty(name = "mqtt.broker.ws.port", defaultValue = "8090")
     int wsPort;
 
-    // Allow anonymous for pure internal traffic (turn off if you need auth)
+    // Auth
     @ConfigProperty(name = "mqtt.broker.allowAnonymous", defaultValue = "true")
     boolean allowAnonymous;
 
-    // Keep everything in-memory for lowest latency
+    // Pure memory (fastest). If you really need durable sessions, flip to true and
+    // configure a store file.
     @ConfigProperty(name = "mqtt.broker.usePersistentStore", defaultValue = "false")
     boolean usePersistentStore;
 
@@ -46,30 +54,40 @@ public class MqttServer {
         mqttBroker = new Server();
         Properties props = new Properties();
 
-        // TCP
-        props.setProperty(BrokerConstants.HOST_PROPERTY_NAME, "0.0.0.0");
+        // --- TCP listener ---
+        props.setProperty(BrokerConstants.HOST_PROPERTY_NAME, host);
         props.setProperty(BrokerConstants.PORT_PROPERTY_NAME, Integer.toString(mqttPort));
 
-        // WebSocket
-        props.setProperty(BrokerConstants.WEB_SOCKET_PORT_PROPERTY_NAME, Integer.toString(wsPort));
-        props.setProperty(BrokerConstants.WEB_SOCKET_PATH_PROPERTY_NAME, BrokerConstants.WEBSOCKET_PATH);
+        // --- WebSocket listener (optional) ---
+        if (wsEnabled) {
+            props.setProperty(BrokerConstants.WEB_SOCKET_PORT_PROPERTY_NAME, Integer.toString(wsPort));
+            props.setProperty(BrokerConstants.WEB_SOCKET_PATH_PROPERTY_NAME, BrokerConstants.WEBSOCKET_PATH);
+        } else {
+            // Ensure no WS listener is created
+            props.setProperty(BrokerConstants.WEB_SOCKET_PORT_PROPERTY_NAME, "0");
+        }
 
-        // Auth
+        // --- Auth ---
         props.setProperty(BrokerConstants.ALLOW_ANONYMOUS_PROPERTY_NAME, Boolean.toString(allowAnonymous));
 
-        // Persistence: fastest is memory; enable MapDB only if you need durable
-        // sessions
+        // --- Persistence ---
         if (usePersistentStore) {
-            // Example: props.setProperty(BrokerConstants.PERSISTENT_STORE_PROPERTY_NAME,
+            // If you enable this, point to a file. Disk adds latency—prefer memory when
+            // possible.
+            // props.setProperty(BrokerConstants.PERSISTENT_STORE_PROPERTY_NAME,
             // "mqtt_store.mapdb");
         } else {
-            // Explicitly force memory to avoid unintended disk overhead
+            // Empty value means no persistent store => keep everything in memory
             props.setProperty(BrokerConstants.PERSISTENT_STORE_PROPERTY_NAME, "");
         }
 
         try {
             mqttBroker.startServer(new MemoryConfig(props));
-            LOGGER.infof("MQTT Broker started on tcp/%d and ws/%d", mqttPort, wsPort);
+            if (wsEnabled) {
+                LOGGER.infof("MQTT Broker started on tcp/%d and ws/%d (host=%s)", mqttPort, wsPort, host);
+            } else {
+                LOGGER.infof("MQTT Broker started on tcp/%d (host=%s). WebSocket disabled.", mqttPort, host);
+            }
         } catch (IOException e) {
             LOGGER.error("Failed to start MQTT Broker", e);
         }

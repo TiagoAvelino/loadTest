@@ -3,25 +3,21 @@ package org.acme.kafka;
 import java.util.Properties;
 import java.util.concurrent.Future;
 
-import org.acme.tracing.TracingBridge; // <-- shared tracing lib
 import org.acme.tracing.messageparams.MqttSendMessage;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Scope;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class KafkaSend {
+    private static final Logger LOGGER = Logger.getLogger(KafkaSend.class.getName());
 
     @ConfigProperty(name = "kafka.bootstrap.servers")
     String bootstrapServers;
@@ -43,9 +39,6 @@ public class KafkaSend {
 
     private KafkaProducer<String, MqttSendMessage> kafkaProducer;
 
-    @Inject
-    Tracer tracer;
-
     public String getBootstrapServers() {
         return bootstrapServers;
     }
@@ -58,6 +51,7 @@ public class KafkaSend {
         props.put("value.serializer", "org.acme.tracing.messageparams.MqttSendMessageSerializer"); // custom serializer
         props.put("acks", "all");
 
+        // Optional security
         if (!isBlank(securityProtocol))
             props.put("security.protocol", securityProtocol);
         if (!isBlank(saslMechanism))
@@ -69,35 +63,32 @@ public class KafkaSend {
         if (!isBlank(truststorePassword))
             props.put("ssl.truststore.password", truststorePassword);
 
+        // (Optional) throughput-friendly defaults; uncomment if you want
+        // batching/compression
+        // props.putIfAbsent("linger.ms", "5");
+        // props.putIfAbsent("batch.size", String.valueOf(32 * 1024));
+        // props.putIfAbsent("compression.type", "lz4");
+
         kafkaProducer = new KafkaProducer<>(props);
     }
 
     public void sendMessage(MqttSendMessage message, String key, String topic) {
-        // 1. Start PRODUCER span
-        Span span = TracingBridge.kafkaProducerSpan(tracer, topic, key, bootstrapServers).startSpan();
-        try (Scope scope = span.makeCurrent()) {
-            // 2. Create record
+        try {
             ProducerRecord<String, MqttSendMessage> record = new ProducerRecord<>(topic, key, message);
 
-            // 3. Inject W3C trace context into headers
-            TracingBridge.injectIntoKafkaHeaders(record.headers());
-
-            // 4. Send synchronously (blocking get for demo; in prod you may prefer async)
+            // Synchronous send (simple & predictable)
             Future<RecordMetadata> future = kafkaProducer.send(record);
             RecordMetadata metadata = future.get();
 
-            span.setAttribute("messaging.kafka.partition", metadata.partition());
-            span.setAttribute("messaging.kafka.offset", metadata.offset());
-            span.setStatus(StatusCode.OK);
+            final long recvEpochMs = System.currentTimeMillis();
 
-            System.out.printf("Kafka message sent: topic=%s, partition=%d, offset=%d%n",
+            final long recvNano = System.nanoTime();
+            LOGGER.infof("Envio kafka: sentEpochMs=%d sentNano=%d", recvEpochMs, recvNano);
+
+            LOGGER.infof("Kafka message sent: topic=%s, partition=%d, offset=%d%n",
                     metadata.topic(), metadata.partition(), metadata.offset());
         } catch (Exception e) {
-            span.recordException(e);
-            span.setStatus(StatusCode.ERROR, "Kafka send failed");
-            System.err.println(" Failed to send Kafka message: " + e.getMessage());
-        } finally {
-            span.end();
+            LOGGER.errorf("Failed to send Kafka message: " + e.getMessage());
         }
     }
 
@@ -105,7 +96,6 @@ public class KafkaSend {
     public void close() {
         if (kafkaProducer != null) {
             kafkaProducer.close();
-            System.out.println("Kafka producer closed");
         }
     }
 

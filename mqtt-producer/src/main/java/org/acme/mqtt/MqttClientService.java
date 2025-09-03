@@ -88,8 +88,9 @@ public class MqttClientService {
     }
 
     public void publishMessage(String topic, MqttSendMessage payload) {
-        // Create a PRODUCER span to represent this publish operation.
-        Span span = TRACER.spanBuilder("mqtt.publish")
+        // === TRACE ENTRADA ===
+        // First trace: start the span and immediately capture System.nanoTime()
+        Span span = TRACER.spanBuilder("TRACE ENTRADA")
                 .setSpanKind(SpanKind.PRODUCER)
                 .setAttribute("messaging.system", "mqtt")
                 .setAttribute("messaging.operation", "publish")
@@ -101,6 +102,16 @@ public class MqttClientService {
                 .setAttribute("net.peer.port", brokerUrlPort(broker))
                 .startSpan();
 
+        // Capture the nano timestamp at the exact moment the trace starts.
+        final long entradaNano = System.nanoTime();
+        // Add as attributes (and an event for timeline visibility)
+        span.setAttribute("trace.entrada.nano", entradaNano);
+        span.setAttribute("trace.entrada.millis", entradaNano / 1_000_000.0);
+        span.addEvent("TRACE_ENTRADA", Attributes.of(
+                io.opentelemetry.api.common.AttributeKey.longKey("entrada.nano"), entradaNano,
+                io.opentelemetry.api.common.AttributeKey.stringKey("app.pod_name"), podName,
+                io.opentelemetry.api.common.AttributeKey.stringKey("app.service"), service));
+
         try (Scope s = span.makeCurrent()) {
             ensureConnected(topic);
 
@@ -110,7 +121,7 @@ public class MqttClientService {
             byte[] data = payload.serialize();
             logger.infof("Publishing message. Size: %d bytes", data.length);
 
-            // (Optional) annotate payload size
+            // Annotate payload and app info
             span.setAllAttributes(Attributes.of(
                     io.opentelemetry.api.common.AttributeKey.longKey("message.payload_size_bytes"), (long) data.length,
                     io.opentelemetry.api.common.AttributeKey.stringKey("app.pod_name"), podName,

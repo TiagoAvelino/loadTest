@@ -2,7 +2,6 @@ package org.acme.mqtt;
 
 import java.time.temporal.ChronoUnit;
 
-import org.acme.tracing.TracingBridge;
 import org.acme.tracing.messageparams.MqttSendMessage;
 
 import org.eclipse.microprofile.faulttolerance.Timeout;
@@ -14,16 +13,7 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
-import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Context;
-import io.opentelemetry.context.Scope;
-
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class MqttProducer {
@@ -32,13 +22,10 @@ public class MqttProducer {
     private static final int MQTT_DEFAULT_PORT = 1883;
 
     // Keep the same “simple” style: connect -> publish -> disconnect
-    // Just make QoS explicit and use IMqttClient.
-    private static final int qos = 0; // 0 = fastest; change to 1/2 if you need guarantees
+    // QoS explicit for clarity: 0 = at most once; fastest.
+    private static final int qos = 0;
 
     private String topic = "";
-
-    @Inject
-    Tracer tracer;
 
     public String getTopic() {
         return this.topic;
@@ -48,40 +35,19 @@ public class MqttProducer {
         this.topic = topic;
     }
 
-    // The method will timeout if it takes longer than 12 seconds.
+    // The method will timeout if it takes longer than 100 ms.
     @Timeout(value = 100, unit = ChronoUnit.MILLIS)
     public void produce(MqttSendMessage mqttMes) {
-        // Fall back if injection hasn’t happened yet for some reason
-        if (tracer == null) {
-            tracer = GlobalOpenTelemetry.getTracer("mqtt-kafka", "1.0");
-        }
-
         final String brokerHost = mqttMes.getHost();
         final String brokerUrl = MQTT_BROKER_PREFIX + brokerHost + ":" + MQTT_DEFAULT_PORT;
         final String destTopic = this.topic;
 
         System.out.printf("Preparing to send message to topic: %s and host: %s%n", destTopic, brokerUrl);
 
-        // Ensure the payload carries the current W3C context (idempotent).
-        TracingBridge.injectIntoMessage(mqttMes);
-
-        // Serialize once, reuse for both extraction and publish
+        // Serialize once, reuse for publish
         byte[] payloadBytes = mqttMes.serialize();
 
-        // Extract upstream parent from the payload to CONTINUE THE SAME TRACE
-        Context parent = TracingBridge.extractFromMessage(payloadBytes);
-
-        // Child span for CONNECT (CLIENT)
-        Span connectSpan = tracer.spanBuilder("mqtt.connect")
-                .setSpanKind(SpanKind.CLIENT)
-                .setParent(parent)
-                .setAttribute("messaging.system", "mqtt")
-                .setAttribute("messaging.url", brokerUrl)
-                .setAttribute("messaging.destination_kind", "topic")
-                .setAttribute("messaging.destination", destTopic)
-                .startSpan();
-
-        try (Scope cs = connectSpan.makeCurrent()) {
+        try {
             IMqttClient mqttClient = new MqttClient(brokerUrl, MqttClient.generateClientId(), new MemoryPersistence());
             MqttConnectOptions connectOptions = new MqttConnectOptions();
             connectOptions.setConnectionTimeout(10); // seconds
@@ -89,55 +55,22 @@ public class MqttProducer {
             connectOptions.setCleanSession(true);
 
             mqttClient.connect(connectOptions);
-            connectSpan.setStatus(StatusCode.OK);
 
-            // Child span for the actual publish I/O
-            Span ioSpan = tracer.spanBuilder("mqtt.publish.io")
-                    .setSpanKind(SpanKind.CLIENT)
-                    .setParent(parent)
-                    .setAttribute("messaging.system", "mqtt")
-                    .setAttribute("messaging.destination_kind", "topic")
-                    .setAttribute("messaging.destination", destTopic)
-                    .setAttribute("net.peer.name", brokerHost)
-                    .setAttribute("net.peer.port", MQTT_DEFAULT_PORT)
-                    .setAttribute("messaging.mqtt.qos", qos)
-                    .setAttribute("message.payload_size_bytes", payloadBytes != null ? payloadBytes.length : 0)
-                    .startSpan();
+            long start = System.nanoTime();
+            mqttClient.publish(destTopic, payloadBytes, qos, false);
+            long end = System.nanoTime();
 
-            try (Scope ios = ioSpan.makeCurrent()) {
-                long start = System.nanoTime();
-                // Use the publish overload that sets QoS directly (no MqttMessage object
-                // needed)
-                mqttClient.publish(destTopic, payloadBytes, qos, false);
-                long end = System.nanoTime();
-
-                ioSpan.setStatus(StatusCode.OK);
-                ioSpan.setAttribute("message.publish_latency_ms", (end - start) / 1_000_000.0);
-            } catch (Exception e) {
-                ioSpan.recordException(e);
-                ioSpan.setStatus(StatusCode.ERROR, "Publish failed");
-                throw e;
-            } finally {
-                ioSpan.end();
-            }
+            System.out.printf("Published to MQTT in %.3f ms%n", (end - start) / 1_000_000.0);
 
             mqttClient.disconnect();
             mqttClient.close();
         } catch (TimeoutException e) {
-            connectSpan.recordException(e);
-            connectSpan.setStatus(StatusCode.ERROR, "Timeout while publishing to MQTT broker");
             System.err.printf("Timeout to publish message to MQTT broker: %s%n", e.getMessage());
         } catch (MqttException e) {
-            connectSpan.recordException(e);
-            connectSpan.setStatus(StatusCode.ERROR, "MQTT error");
             System.err.printf("Failed to publish message to MQTT broker: %s %s %s%n",
                     e.getMessage(), e.getCause(), e.getReasonCode());
         } catch (Exception e) {
-            connectSpan.recordException(e);
-            connectSpan.setStatus(StatusCode.ERROR, "Unexpected error");
             System.err.printf("Unexpected error publishing to MQTT: %s%n", e.getMessage());
-        } finally {
-            connectSpan.end();
         }
     }
 }
