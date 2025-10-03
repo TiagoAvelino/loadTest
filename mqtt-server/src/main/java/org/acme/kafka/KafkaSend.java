@@ -2,7 +2,6 @@ package org.acme.kafka;
 
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.logging.Level;
 import org.jboss.logging.Logger;
 
 import org.acme.tracing.messageparams.MqttSendMessage;

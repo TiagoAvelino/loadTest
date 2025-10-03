@@ -55,7 +55,7 @@ spec:
                   name: kafka-client-ssl-secret
                   key: truststore-password
             - name: KAFKA_BOOTSTRAP_SERVERS
-              value: 'my-cluster-kafka-bootstrap-kafka.apps.tiago-cluster.sandbox1433.opentlc.com:443'
+              value: 'my-cluster-kafka-bootstrap.kafka:9093'
             - name: KAFKA_PASSWORD
               valueFrom:
                 secretKeyRef:

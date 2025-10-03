@@ -11,18 +11,11 @@ import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.eclipse.paho.client.mqttv3.MqttPersistenceException;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jboss.logging.Logger;
 
 // OpenTelemetry
-import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.common.Attributes;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Scope;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -42,10 +35,6 @@ public class MqttClientService {
 
     private volatile boolean connecting;
     private static final Logger logger = Logger.getLogger(MqttClientService.class);
-
-    // ---- OpenTelemetry ----
-    private static final OpenTelemetry OTEL = GlobalOpenTelemetry.get();
-    private static final Tracer TRACER = OTEL.getTracer("org.acme.mqtt.publisher", "1.0.0");
 
     @PostConstruct
     void configureBroker() {
@@ -88,62 +77,30 @@ public class MqttClientService {
     }
 
     public void publishMessage(String topic, MqttSendMessage payload) {
-        // === TRACE ENTRADA ===
-        // First trace: start the span and immediately capture System.nanoTime()
-        Span span = TRACER.spanBuilder("TRACE ENTRADA")
-                .setSpanKind(SpanKind.PRODUCER)
-                .setAttribute("messaging.system", "mqtt")
-                .setAttribute("messaging.operation", "publish")
-                .setAttribute("messaging.destination", topic)
-                .setAttribute("messaging.destination_kind", "topic")
-                .setAttribute("messaging.protocol", "mqtt")
-                .setAttribute("messaging.protocol_version", "3.1.1")
-                .setAttribute("net.peer.name", brokerUrlHost(broker))
-                .setAttribute("net.peer.port", brokerUrlPort(broker))
-                .startSpan();
 
-        // Capture the nano timestamp at the exact moment the trace starts.
-        final long entradaNano = System.nanoTime();
-        // Add as attributes (and an event for timeline visibility)
-        span.setAttribute("trace.entrada.nano", entradaNano);
-        span.setAttribute("trace.entrada.millis", entradaNano / 1_000_000.0);
-        span.addEvent("TRACE_ENTRADA", Attributes.of(
-                io.opentelemetry.api.common.AttributeKey.longKey("entrada.nano"), entradaNano,
-                io.opentelemetry.api.common.AttributeKey.stringKey("app.pod_name"), podName,
-                io.opentelemetry.api.common.AttributeKey.stringKey("app.service"), service));
-
-        try (Scope s = span.makeCurrent()) {
+        try {
             ensureConnected(topic);
-
-            // Inject context so downstream services can continue the trace.
-            TracingBridge.injectIntoMessage(payload);
-
-            byte[] data = payload.serialize();
-            logger.infof("Publishing message. Size: %d bytes", data.length);
-
-            // Annotate payload and app info
-            span.setAllAttributes(Attributes.of(
-                    io.opentelemetry.api.common.AttributeKey.longKey("message.payload_size_bytes"), (long) data.length,
-                    io.opentelemetry.api.common.AttributeKey.stringKey("app.pod_name"), podName,
-                    io.opentelemetry.api.common.AttributeKey.stringKey("app.service"), service));
-
-            MqttMessage message = new MqttMessage(data);
-            message.setQos(0); // test with 0 for throughput; bump to 1/2 if you need delivery guarantees
-
-            long start = System.nanoTime();
-            client.publish(topic, message);
-            long end = System.nanoTime();
-
-            span.setStatus(StatusCode.OK);
-            span.setAttribute("message.publish_latency_ms", (end - start) / 1_000_000.0);
-            logger.infof("Published in %.2f ms", (end - start) / 1_000_000.0);
-        } catch (MqttException | InterruptedException e) {
-            span.recordException(e);
-            span.setStatus(StatusCode.ERROR, e.getMessage());
-            logger.error("Error while publishing message to MQTT broker: ", e);
-        } finally {
-            span.end();
+        } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
         }
+
+        byte[] data = payload.serialize();
+        logger.infof("Publishing message. Size: %d bytes", data.length);
+
+        MqttMessage message = new MqttMessage(data);
+        message.setQos(0); // test with 0 for throughput; bump to 1/2 if you need delivery guarantees
+
+        long start = System.nanoTime();
+        try {
+            client.publish(topic, message);
+        } catch (MqttPersistenceException e) {
+            e.printStackTrace();
+        } catch (MqttException e) {
+            e.printStackTrace();
+        }
+        long end = System.nanoTime();
+        logger.infof("Published in %.2f ms", (end - start) / 1_000_000.0);
     }
 
     private synchronized void ensureConnected(String topic) throws InterruptedException {

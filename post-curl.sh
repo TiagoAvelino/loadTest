@@ -5,14 +5,14 @@ counter=1
 while true
 do
   # Generate a dynamic topic using the counter
-  dynamic_topic="mqtt-message-in/1/$counter/app/test"
+    ="mqtt-message-in/1/$counter/app/test"
   
   # Print the dynamic topic
   echo "Dynamic topic: $dynamic_topic"
 
   # Send the POST request with the dynamic topic   curl -X POST "http://mqtt-producer-kafka.apps.tiago-cluster.sandbox2008.opentlc.com/mqtt/send?topic=mqtt-message-in/1/2/app/test" \
 
-  curl -X POST "http://mqtt-producer-kafka.apps.tiago-cluster.sandbox1433.opentlc.com/mqtt/send?topic=mqtt-message-in/1/2/app/test" \
+  curl -X POST "http://mqtt-producer-kafka.apps.tiago-cluster.sandbox5437.opentlc.com/mqtt/send?topic=mqtt-message-in/1/2/app/test/pull" \
     -H "Content-Type: application/json" \
     -H "Accept: */*" \
     -d "{

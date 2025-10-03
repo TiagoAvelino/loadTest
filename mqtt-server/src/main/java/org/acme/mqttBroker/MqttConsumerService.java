@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.net.InetAddress;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.Objects;
@@ -13,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 import org.acme.kafka.KafkaSend;
 import org.acme.tracing.TracingBridge;
 import org.acme.tracing.messageparams.MqttSendMessage;
+import org.acme.util.PodInfo;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.context.ManagedExecutor;
 import org.eclipse.paho.client.mqttv3.MqttAsyncClient;
@@ -23,9 +25,9 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jboss.logging.Logger;
 
 import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.quarkus.runtime.Startup;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -46,6 +48,9 @@ public class MqttConsumerService {
     KafkaSend producer;
     @Inject
     ManagedExecutor managedExecutor;
+
+    @Inject
+    PodInfo podInfo;
 
     // ---- Runtime config (env-friendly) -----------------------------------------
     @ConfigProperty(name = "mqtt.url", defaultValue = "tcp://localhost:1883")
@@ -75,26 +80,24 @@ public class MqttConsumerService {
     int workerThreads;
 
     // Optional tracing (disable for lowest latency)
-    @ConfigProperty(name = "mqtt.tracing.enabled", defaultValue = "false")
+    @ConfigProperty(name = "mqtt.tracing.enabled", defaultValue = "true")
     boolean tracingEnabled;
 
     // -----------------------------------------------------------------------------
     private MqttAsyncClient client;
     private volatile String localHostIp = "unknown";
     private ArrayBlockingQueue<Envelope> queue;
+    private String mqttHost; // parsed from mqttUrl for span attributes
+    private Integer mqttPort; // parsed from mqttUrl for span attributes
 
     // Simple envelope to avoid per-message allocations beyond the byte[]
     private static final class Envelope {
         final String topic;
         final byte[] payload;
-        final long recvEpochMs;
-        final long recvNano;
 
-        Envelope(String topic, byte[] payload, long recvEpochMs, long recvNano) {
+        Envelope(String topic, byte[] payload) {
             this.topic = topic;
             this.payload = payload;
-            this.recvEpochMs = recvEpochMs;
-            this.recvNano = recvNano;
         }
     }
 
@@ -106,9 +109,25 @@ public class MqttConsumerService {
             LOGGER.warn("Failed to resolve host IP at startup", e);
         }
 
+        // Parse mqtt.url (tcp://host:port) for attributes
+        try {
+            URI uri = URI.create(mqttUrl);
+            mqttHost = uri.getHost();
+            int p = uri.getPort();
+            if (p < 0) {
+                mqttPort = ("ssl".equalsIgnoreCase(uri.getScheme()) || "mqtts".equalsIgnoreCase(uri.getScheme()))
+                        ? 8883
+                        : 1883;
+            } else {
+                mqttPort = p;
+            }
+        } catch (Exception ignore) {
+            mqttHost = null;
+            mqttPort = null;
+        }
+
         queue = new ArrayBlockingQueue<>(Math.max(1024, queueCapacity));
 
-        // Prefer async client to keep callback path thin and non-blocking
         try {
             client = new MqttAsyncClient(mqttUrl, "consumer-" + InetAddress.getLocalHost().getHostName(),
                     new MemoryPersistence());
@@ -132,7 +151,6 @@ public class MqttConsumerService {
             return;
         }
 
-        // Install a very thin callback: enqueue and return
         client.setCallback(new MqttCallback() {
             @Override
             public void connectionLost(Throwable cause) {
@@ -145,16 +163,11 @@ public class MqttConsumerService {
             @Override
             public void messageArrived(String topic, org.eclipse.paho.client.mqttv3.MqttMessage mqttMessage) {
                 final byte[] payload = mqttMessage.getPayload();
-                final long recvEpochMs = System.currentTimeMillis();
 
-                final long recvNano = System.nanoTime();
-                LOGGER.infof("Consumo MQTT: sentEpochMs=%d sentNano=%d", recvEpochMs, recvNano);
-
-                Envelope env = new Envelope(topic, payload, recvEpochMs, recvNano);
+                Envelope env = new Envelope(topic, payload);
                 boolean offered = queue.offer(env); // non-blocking to protect callback thread
                 if (!offered) {
-                    // Drop oldest element to keep latency low (optional policy).
-                    queue.poll();
+                    queue.poll(); // drop oldest to keep latency low
                     queue.offer(env);
                     if (LOGGER.isDebugEnabled()) {
                         LOGGER.debugf("Queue full, dropped oldest message. capacity=%d", queue.size());
@@ -176,7 +189,6 @@ public class MqttConsumerService {
             return;
         }
 
-        // Start workers
         int n = Math.max(1, workerThreads);
         for (int i = 0; i < n; i++) {
             final int idx = i;
@@ -184,10 +196,7 @@ public class MqttConsumerService {
         }
 
         LOGGER.infof("Consumer started with %d worker(s), queue size=%d (remaining=%d, tracing=%s)",
-                n,
-                queue.size(),
-                queue.remainingCapacity(),
-                tracingEnabled ? "on" : "off");
+                n, queue.size(), queue.remainingCapacity(), tracingEnabled ? "on" : "off");
     }
 
     private void workerLoop(int workerIndex) {
@@ -219,8 +228,6 @@ public class MqttConsumerService {
     private void handleEnvelope(Envelope env) {
         final String topic = env.topic;
         final byte[] payload = env.payload;
-        final long recvEpochMs = env.recvEpochMs;
-        final long recvNano = env.recvNano;
 
         if (payload == null || payload.length == 0) {
             if (LOGGER.isDebugEnabled())
@@ -228,18 +235,31 @@ public class MqttConsumerService {
             return;
         }
 
-        // Optional tracing around "receive + process + forward"
         if (tracingEnabled) {
-            var extractedParent = TracingBridge.extractFromMessage(payload);
-            var receiveSpan = tracer.spanBuilder("mqtt.receive")
-                    .setSpanKind(SpanKind.CONSUMER)
-                    .setParent(extractedParent)
-                    .setAttribute("messaging.system", "mqtt")
-                    .setAttribute("messaging.destination", topic)
-                    .setAttribute("message.payload_size_bytes", payload.length)
-                    .startSpan();
+            // Extract upstream (if any); if none, we will start a new root span.
+            Context extracted = Context.root();
+            try {
+                extracted = TracingBridge.extractFromMessage(payload);
+                if (extracted == null)
+                    extracted = Context.root();
+            } catch (Throwable ignore) {
+                extracted = Context.root();
+            }
+
+            boolean hasParent = io.opentelemetry.api.trace.Span.fromContext(extracted)
+                    .getSpanContext().isValid();
+
+            var builder = TracingBridge.mqttConsumerSpan(tracer,
+                    hasParent ? extracted : Context.root(),
+                    topic, mqttHost, mqttPort, payload.length);
+
+            if (!hasParent) {
+                builder.setNoParent(); // force new root if this is the first hop
+            }
+
+            var receiveSpan = builder.startSpan();
             try (Scope rs = receiveSpan.makeCurrent()) {
-                processAndForward(topic, payload, recvEpochMs, recvNano);
+                processAndForward(topic, payload);
                 receiveSpan.setStatus(StatusCode.OK);
             } catch (Exception e) {
                 receiveSpan.recordException(e);
@@ -249,43 +269,56 @@ public class MqttConsumerService {
                 receiveSpan.end();
             }
         } else {
-            processAndForward(topic, payload, recvEpochMs, recvNano);
+            processAndForward(topic, payload);
         }
     }
 
-    private void processAndForward(String topic, byte[] payload, long recvEpochMs, long recvNano) {
-        // Deserialize (Java serialization path kept)
+    private void processAndForward(String topic, byte[] payload) {
         MqttSendMessage msg = deserialize(payload);
         if (msg == null) {
             LOGGER.error("Deserialization returned null");
             return;
         }
 
-        // Compute end-to-end time using publisher-stamped epoch (if present)
-
-        // Attach host for downstream
-        if (msg.getHost() == null) {
-            msg.setHost(localHostIp);
+        // === CHANGE STARTS HERE ===
+        // If host is missing, set to pod name (fast, no network calls)
+        if (msg.getHost() == null || msg.getHost().isBlank()) {
+            msg.setHost(podInfo.podName());
         }
+        // If you still want to carry the IP for debugging, you can add a header/custom
+        // field here.
+        // === CHANGE ENDS HERE ===
 
-        // Business logic (keep light)
         if (LOGGER.isDebugEnabled() && msg.getMessage() != null) {
-            LOGGER.infof("Message received content: %d, %d " + msg.getMessage(), msg.getSentNano(),
-                    msg.getSentEpochMs());
+            LOGGER.infof("Message received content: %d, %d %s",
+                    msg.getSentNano(), msg.getSentEpochMs(), msg.getMessage());
         }
 
-        // Re-inject trace context (no-op if tracing is off)
-        TracingBridge.injectIntoMessage(msg);
-
-        // Transform topic/key
         String key = transformKey(topic);
         String dest = transformTopic(topic);
         if (replacePullWithPush && dest.endsWith(".pull")) {
             dest = dest.substring(0, dest.length() - 5) + ".push";
         }
 
-        // Forward to Kafka (assumed async in your KafkaSend)
-        producer.sendMessage(msg, key, dest);
+        if (tracingEnabled) {
+            var produceSpan = TracingBridge.kafkaProducerSpan(tracer, dest, key, /* bootstrapServers */ null)
+                    .startSpan();
+            try (Scope ps = produceSpan.makeCurrent()) {
+                // Inject current context so downstream continues the SAME trace
+                TracingBridge.injectIntoMessage(msg);
+                producer.sendMessage(msg, key, dest);
+                produceSpan.setStatus(StatusCode.OK);
+            } catch (Exception e) {
+                produceSpan.recordException(e);
+                produceSpan.setStatus(StatusCode.ERROR, e.getMessage());
+                throw e;
+            } finally {
+                produceSpan.end();
+            }
+        } else {
+            TracingBridge.injectIntoMessage(msg); // no-op if OTEL disabled globally
+            producer.sendMessage(msg, key, dest);
+        }
     }
 
     private MqttSendMessage deserialize(byte[] data) {

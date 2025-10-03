@@ -60,7 +60,7 @@ spec:
             - name: JAVA_APP_JAR
               value: /deployments/quarkus-run.jar
             - name: KAFKA_BOOTSTRAP_SERVERS
-              value: 'my-cluster-kafka-bootstrap-kafka.apps.tiago-cluster.sandbox1433.opentlc.com:443'
+              value: 'my-cluster-kafka-bootstrap.kafka:9093'
           ports:
             - name: http
               containerPort: 8080
