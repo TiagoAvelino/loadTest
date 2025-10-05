@@ -1,16 +1,35 @@
+# console.yaml
 apiVersion: console.streamshub.github.com/v1alpha1
 kind: Console
 metadata:
   name: my-console
+  namespace: kafka
 spec:
-  hostname: my-console.apps.tiago-cluster.sandbox2998.opentlc.com 
+  hostname: my-console.apps.tiago-cluster.sandbox5437.opentlc.com
+
   kafkaClusters:
     - name: my-cluster
       namespace: kafka
       listener: external
-      properties:
-        values: []
-        valuesFrom: []
+
       credentials:
         kafkaUser:
           name: redhat-user
+
+      properties:
+        values:
+          - name: security.protocol
+            value: SASL_SSL
+          - name: sasl.mechanism
+            value: SCRAM-SHA-512
+          - name: ssl.truststore.type
+            value: PEM
+        valuesFrom:
+          - name: sasl.jaas.config
+            secretRef:
+              name: redhat-user
+              key: sasl.jaas.config
+          - name: ssl.truststore.certificates
+            secretRef:
+              name: my-cluster-cluster-ca-cert
+              key: ca.crt

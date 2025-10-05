@@ -1,47 +1,72 @@
 package org.acme.tracing.messageparams;
 
-import java.io.ByteArrayOutputStream;
-import java.io.ObjectOutputStream;
-import java.io.Serializable;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
-import io.quarkus.runtime.annotations.RegisterForReflection;
-import lombok.Getter;
-import lombok.Setter;
-
-@Getter
-@Setter
-@RegisterForReflection // ensure available in native
-public class MqttSendMessage implements Serializable {
-    private static final long serialVersionUID = 1L;
-
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public class MqttSendMessage {
     private String jwt;
     private String message;
     private String host;
-    private Boolean isThereAny = false;
+    private Boolean isThereAny;
+
+    // Force lowercase on the wire so OTel can extract without guesswork
+    @JsonProperty("traceparent")
     private String traceParent;
+
+    @JsonProperty("tracestate")
     private String traceState;
 
-    // --- Timing fields added for end-to-end measurement ---
-    // Cross-JVM comparable (based on wall clock)
-    private long sentEpochMs;
-    // Only comparable within the same JVM (for debugging/reference)
-    private long sentNano;
-
-    // explicit public no-arg ctor for reflective instantiation
     public MqttSendMessage() {
     }
 
-    public byte[] serialize() {
-        try {
-            ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-            try (ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream)) {
-                objectOutputStream.writeObject(this);
-                objectOutputStream.flush();
-            }
-            return byteArrayOutputStream.toByteArray();
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null; // keep behavior; alternatively throw a custom SerializationException
-        }
+    public String getJwt() {
+        return jwt;
+    }
+
+    public void setJwt(String jwt) {
+        this.jwt = jwt;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
+    }
+
+    public String getHost() {
+        return host;
+    }
+
+    public void setHost(String host) {
+        this.host = host;
+    }
+
+    public Boolean getIsThereAny() {
+        return isThereAny;
+    }
+
+    public void setIsThereAny(Boolean isThereAny) {
+        this.isThereAny = isThereAny;
+    }
+
+    // Keep camelCase getters/setters for your app, but JSON field name is forced by
+    // @JsonProperty
+    public String getTraceParent() {
+        return traceParent;
+    }
+
+    public void setTraceParent(String traceParent) {
+        this.traceParent = traceParent;
+    }
+
+    public String getTraceState() {
+        return traceState;
+    }
+
+    public void setTraceState(String traceState) {
+        this.traceState = traceState;
     }
 }

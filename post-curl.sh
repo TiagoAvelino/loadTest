@@ -5,7 +5,6 @@ counter=1
 while true
 do
   # Generate a dynamic topic using the counter
-    ="mqtt-message-in/1/$counter/app/test"
   
   # Print the dynamic topic
   echo "Dynamic topic: $dynamic_topic"

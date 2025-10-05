@@ -1,8 +1,5 @@
 package org.acme.mqttBroker;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
@@ -24,6 +21,7 @@ import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jboss.logging.Logger;
 
+import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
@@ -34,6 +32,13 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+
+// Jackson
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
+
+// OTel propagator helpers
+import io.opentelemetry.context.propagation.TextMapGetter;
 
 @RegisterForReflection
 @ApplicationScoped
@@ -48,9 +53,13 @@ public class MqttConsumerService {
     KafkaSend producer;
     @Inject
     ManagedExecutor managedExecutor;
-
     @Inject
     PodInfo podInfo;
+
+    // Jackson mapper/reader (JSON)
+    @Inject
+    ObjectMapper objectMapper;
+    private ObjectReader mqttMessageReader;
 
     // ---- Runtime config (env-friendly) -----------------------------------------
     @ConfigProperty(name = "mqtt.url", defaultValue = "tcp://localhost:1883")
@@ -101,6 +110,27 @@ public class MqttConsumerService {
         }
     }
 
+    // TextMapGetter for extracting from a POJO (MqttSendMessage) that contains
+    // traceparent/tracestate fields
+    private static final TextMapGetter<MqttSendMessage> MSG_GETTER = new TextMapGetter<>() {
+        @Override
+        public Iterable<String> keys(MqttSendMessage carrier) {
+            // we only care about two keys
+            return java.util.List.of("traceparent", "tracestate");
+        }
+
+        @Override
+        public String get(MqttSendMessage carrier, String key) {
+            if (carrier == null || key == null)
+                return null;
+            return switch (key) {
+                case "traceparent" -> carrier.getTraceParent();
+                case "tracestate" -> carrier.getTraceState();
+                default -> null;
+            };
+        }
+    };
+
     @Startup(20)
     public void init() {
         try {
@@ -108,6 +138,9 @@ public class MqttConsumerService {
         } catch (UnknownHostException e) {
             LOGGER.warn("Failed to resolve host IP at startup", e);
         }
+
+        // Build reusable Jackson reader
+        mqttMessageReader = objectMapper.readerFor(MqttSendMessage.class);
 
         // Parse mqtt.url (tcp://host:port) for attributes
         try {
@@ -235,63 +268,56 @@ public class MqttConsumerService {
             return;
         }
 
-        if (tracingEnabled) {
-            // Extract upstream (if any); if none, we will start a new root span.
-            Context extracted = Context.root();
-            try {
-                extracted = TracingBridge.extractFromMessage(payload);
-                if (extracted == null)
-                    extracted = Context.root();
-            } catch (Throwable ignore) {
-                extracted = Context.root();
-            }
-
-            boolean hasParent = io.opentelemetry.api.trace.Span.fromContext(extracted)
-                    .getSpanContext().isValid();
-
-            var builder = TracingBridge.mqttConsumerSpan(tracer,
-                    hasParent ? extracted : Context.root(),
-                    topic, mqttHost, mqttPort, payload.length);
-
-            if (!hasParent) {
-                builder.setNoParent(); // force new root if this is the first hop
-            }
-
-            var receiveSpan = builder.startSpan();
-            try (Scope rs = receiveSpan.makeCurrent()) {
-                processAndForward(topic, payload);
-                receiveSpan.setStatus(StatusCode.OK);
-            } catch (Exception e) {
-                receiveSpan.recordException(e);
-                receiveSpan.setStatus(StatusCode.ERROR, e.getMessage());
-                throw e;
-            } finally {
-                receiveSpan.end();
-            }
-        } else {
-            processAndForward(topic, payload);
-        }
-    }
-
-    private void processAndForward(String topic, byte[] payload) {
-        MqttSendMessage msg = deserialize(payload);
+        // ---- Deserialize ONCE (Jackson) ----
+        final MqttSendMessage msg = deserialize(payload);
         if (msg == null) {
             LOGGER.error("Deserialization returned null");
             return;
         }
 
-        // === CHANGE STARTS HERE ===
-        // If host is missing, set to pod name (fast, no network calls)
+        if (!tracingEnabled) {
+            processAndForward(topic, msg);
+            return;
+        }
+
+        // ---- Extract parent from the POJO that Producer populated (child-of Producer
+        // span) ----
+        Context parent = GlobalOpenTelemetry.getPropagators()
+                .getTextMapPropagator()
+                .extract(Context.root(), msg, MSG_GETTER);
+
+        boolean hasParent = Span.fromContext(parent).getSpanContext().isValid();
+
+        var builder = TracingBridge.mqttConsumerSpan(
+                tracer,
+                hasParent ? parent : Context.root(),
+                topic, mqttHost, mqttPort, payload.length);
+
+        if (!hasParent) {
+            builder.setNoParent(); // first hop (unlikely here, but keeps behavior explicit)
+        }
+
+        var receiveSpan = builder.startSpan();
+        try (Scope rs = receiveSpan.makeCurrent()) {
+            processAndForward(topic, msg);
+            receiveSpan.setStatus(StatusCode.OK);
+        } catch (Exception e) {
+            receiveSpan.recordException(e);
+            receiveSpan.setStatus(StatusCode.ERROR, e.getMessage());
+            throw e;
+        } finally {
+            receiveSpan.end();
+        }
+    }
+
+    private void processAndForward(String topic, MqttSendMessage msg) {
+        // Ensure host is set for downstream debugging
         if (msg.getHost() == null || msg.getHost().isBlank()) {
             msg.setHost(podInfo.podName());
         }
-        // If you still want to carry the IP for debugging, you can add a header/custom
-        // field here.
-        // === CHANGE ENDS HERE ===
 
         if (LOGGER.isDebugEnabled() && msg.getMessage() != null) {
-            LOGGER.infof("Message received content: %d, %d %s",
-                    msg.getSentNano(), msg.getSentEpochMs(), msg.getMessage());
+            LOGGER.infof("Message received content: %s", msg.getMessage());
         }
 
         String key = transformKey(topic);
@@ -321,15 +347,13 @@ public class MqttConsumerService {
         }
     }
 
+    // Jackson JSON deserialization
     private MqttSendMessage deserialize(byte[] data) {
-        try (var ois = new ObjectInputStream(new ByteArrayInputStream(data))) {
-            Object o = ois.readObject();
-            if (o instanceof MqttSendMessage) {
-                return (MqttSendMessage) o;
-            }
-            LOGGER.errorf("Unexpected object type: %s", (o == null ? "null" : o.getClass().getName()));
-            return null;
-        } catch (IOException | ClassNotFoundException e) {
+        try {
+            if (data == null || data.length == 0)
+                return null;
+            return mqttMessageReader.readValue(data);
+        } catch (Exception e) {
             if (tracingEnabled) {
                 Span.current().recordException(e);
                 Span.current().setStatus(StatusCode.ERROR, "Deserialization failure");

@@ -15,10 +15,13 @@ import org.eclipse.paho.client.mqttv3.MqttPersistenceException;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jboss.logging.Logger;
 
-// OpenTelemetry
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectWriter;
+
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class MqttClientService {
@@ -36,6 +39,11 @@ public class MqttClientService {
     private volatile boolean connecting;
     private static final Logger logger = Logger.getLogger(MqttClientService.class);
 
+    // Jackson: use a prebuilt writer for speed and thread-safety
+    @Inject
+    ObjectMapper objectMapper;
+    private ObjectWriter mqttMessageWriter;
+
     @PostConstruct
     void configureBroker() {
         int index = extractOrdinal(podName);
@@ -43,6 +51,9 @@ public class MqttClientService {
 
         broker = "tcp://mqtt-server-" + index + service;
         logger.info("Resolved broker address: " + broker);
+
+        // Build once to avoid per-call reconfiguration
+        mqttMessageWriter = objectMapper.writerFor(MqttSendMessage.class);
     }
 
     public void init(String topic) {
@@ -56,7 +67,7 @@ public class MqttClientService {
                 client = new MqttClient(broker, MqttClient.generateClientId(), new MemoryPersistence());
                 MqttConnectOptions connOpts = new MqttConnectOptions();
                 connOpts.setCleanSession(true);
-                connOpts.setMaxInflight(1000);
+                connOpts.setMaxInflight(1000); // QoS0: keep modest to reduce memory pressure
 
                 connecting = true;
                 IMqttToken token = client.connectWithResult(connOpts);
@@ -77,27 +88,36 @@ public class MqttClientService {
     }
 
     public void publishMessage(String topic, MqttSendMessage payload) {
-
         try {
             ensureConnected(topic);
         } catch (InterruptedException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while connecting to MQTT broker", e);
         }
 
-        byte[] data = payload.serialize();
-        logger.infof("Publishing message. Size: %d bytes", data.length);
+        byte[] data;
+        try {
+            // Serialize to JSON bytes
+            data = mqttMessageWriter.writeValueAsBytes(payload);
+        } catch (Exception e) {
+            logger.error("Failed to serialize message to JSON", e);
+            return;
+        }
+
+        if (logger.isDebugEnabled()) {
+            logger.debugf("Publishing message. Size: %d bytes", data.length);
+        }
 
         MqttMessage message = new MqttMessage(data);
-        message.setQos(0); // test with 0 for throughput; bump to 1/2 if you need delivery guarantees
+        message.setQos(0); // throughput-optimized; increase to 1/2 only if you need delivery guarantees
 
         long start = System.nanoTime();
         try {
             client.publish(topic, message);
         } catch (MqttPersistenceException e) {
-            e.printStackTrace();
+            logger.error("MQTT persistence error while publishing", e);
         } catch (MqttException e) {
-            e.printStackTrace();
+            logger.error("MQTT error while publishing", e);
         }
         long end = System.nanoTime();
         logger.infof("Published in %.2f ms", (end - start) / 1_000_000.0);
@@ -143,15 +163,22 @@ public class MqttClientService {
             @Override
             public void messageArrived(String topic, MqttMessage message) {
                 long receivedAt = System.nanoTime();
-                logger.info("Message arrived. Topic: " + topic + " Size: " + message.getPayload().length + " bytes at "
-                        + receivedAt);
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Message arrived. Topic: " + topic + " Size: " + message.getPayload().length
+                            + " bytes at " + receivedAt);
+                }
                 // If this service also consumes its own publishes, you could extract and create
                 // a span here.
+                // Example (mirrors your consumer):
+                // Context ctx = TracingBridge.extractFromMessage(message.getPayload());
+                // Span span = TracingBridge.mqttConsumerSpan(...).startSpan(); ...
             }
 
             @Override
             public void deliveryComplete(IMqttDeliveryToken token) {
-                logger.debug("Delivery complete for token: " + token.getMessageId());
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Delivery complete for token: " + token.getMessageId());
+                }
             }
         };
     }
@@ -165,6 +192,7 @@ public class MqttClientService {
         }
     }
 
+    @SuppressWarnings("unused")
     private static String brokerUrlHost(String brokerUrl) {
         try {
             String u = brokerUrl.replace("tcp://", "");
@@ -175,6 +203,7 @@ public class MqttClientService {
         }
     }
 
+    @SuppressWarnings("unused")
     private static long brokerUrlPort(String brokerUrl) {
         try {
             String u = brokerUrl.replace("tcp://", "");

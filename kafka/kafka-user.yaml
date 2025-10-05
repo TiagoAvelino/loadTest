@@ -1,30 +1,40 @@
+# kafkauser-redhat-user.yaml
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaUser
 metadata:
-  labels:
-    strimzi.io/cluster: my-cluster
   name: redhat-user
   namespace: kafka
+  labels:
+    strimzi.io/cluster: my-cluster
 spec:
   authentication:
+    type: scram-sha-512
+    # keep your external password secret wiring if you use it
     password:
       valueFrom:
         secretKeyRef:
-          key: kafka-user-password
           name: kafka-user-password
-    type: scram-sha-512
+          key: kafka-user-password
   authorization:
-    acls:
-      - host: '*'
-        operation: All
-        resource:
-          name: '*'
-          patternType: literal
-          type: topic
-      - host: '*'
-        operation: All
-        resource:
-          name: '*'
-          patternType: literal
-          type: group
     type: simple
+    acls:
+      # REQUIRED for the Console/AdminClient to discover the cluster
+      - resource:
+          type: cluster
+        operations:
+          - Describe
+          - DescribeConfigs
+
+      # You currently allow everything on topics and groups. Keep as-is or tighten later.
+      - resource:
+          type: topic
+          name: "*"
+          patternType: literal
+        operations:
+          - All
+      - resource:
+          type: group
+          name: "*"
+          patternType: literal
+        operations:
+          - All
