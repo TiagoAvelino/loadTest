@@ -2,9 +2,9 @@ package org.acme.mqtt;
 
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -27,8 +27,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.api.common.AttributeKey;
-import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
@@ -78,6 +76,9 @@ public class MqttConsumer {
     @ConfigProperty(name = "mqtt.consumer.parallelism", defaultValue = "4")
     int parallelism;
 
+    @ConfigProperty(name = "mqtt.consumer.copy.payload", defaultValue = "false")
+    boolean copyPayload;
+
     @ConfigProperty(name = "mqtt.tracing.enabled", defaultValue = "true")
     boolean tracingEnabled;
 
@@ -93,6 +94,9 @@ public class MqttConsumer {
 
     private String brokerHost;
     private Integer brokerPort;
+
+    // small bounded queue advisory (optional)
+    private ArrayBlockingQueue<Runnable> workQueue;
 
     // Getter to extract from a simple map carrier
     private static final TextMapGetter<Map<String, String>> MAP_GETTER = new TextMapGetter<>() {
@@ -128,7 +132,9 @@ public class MqttConsumer {
             opts.setAutomaticReconnect(true);
             opts.setKeepAliveInterval(Math.max(10, keepAliveSeconds));
             opts.setConnectionTimeout(Math.max(1, connectTimeoutSeconds));
-            opts.setMaxInflight(Math.max(20, maxInflight));
+            opts.setMaxInflight(Math.max(1000, maxInflight));
+            // MQTT 3.1.1 is broadly fastest/most compatible
+            opts.setMqttVersion(MqttConnectOptions.MQTT_VERSION_3_1_1);
             opts.setSocketFactory(new TcpNoDelaySocketFactory(
                     opts.getConnectionTimeout(), Math.max(0, soSndBuf), Math.max(0, soRcvBuf)));
 
@@ -138,6 +144,8 @@ public class MqttConsumer {
                     brokerUrl, opts.getMaxInflight(), soSndBuf, soRcvBuf);
 
             parallelism = Math.max(1, parallelism);
+            // small bounded queue → quick signal if we’re falling behind
+            workQueue = new ArrayBlockingQueue<>(parallelism * 256);
             workerPool = Executors.newFixedThreadPool(parallelism, r -> {
                 var t = new Thread(r, "mqtt-consumer-worker");
                 t.setDaemon(true);
@@ -157,8 +165,22 @@ public class MqttConsumer {
                 }
             }, (t, msg) -> {
                 final byte[] payload = msg.getPayload();
-                final byte[] copy = (payload != null) ? Arrays.copyOf(payload, payload.length) : new byte[0];
-                java.util.concurrent.CompletableFuture.runAsync(() -> handleMessageWithTracing(t, copy), workerPool);
+                // zero-copy is safe if we fully process inside this task (Paho won’t reuse the
+                // array)
+                final byte[] data = (copyPayload && payload != null)
+                        ? java.util.Arrays.copyOf(payload, payload.length)
+                        : payload;
+
+                Runnable task = () -> handleMessageWithTracing(t, data);
+                // try bounded queue to avoid unbounded latency growth
+                if (!workQueue.offer(task)) {
+                    // queue full: drop oldest or log; here we log (you can also run in caller)
+                    LOGGER.warn("Consumer work queue saturated; executing in caller (may increase callback time).");
+                    task.run();
+                } else {
+                    // pull off queue in workers
+                    workerPool.execute(workQueue.poll());
+                }
             });
 
         } catch (MqttException e) {
@@ -166,22 +188,22 @@ public class MqttConsumer {
         }
     }
 
-    private void handleMessageWithTracing(String topic, byte[] payloadCopy) {
+    private void handleMessageWithTracing(String topic, byte[] payload) {
         if (!tracingEnabled) {
-            fastNoTracing(topic, payloadCopy);
+            fastNoTracing(topic, payload);
             return;
         }
 
         // 1) Try your bridge
         Context extracted = null;
         try {
-            extracted = TracingBridge.extractFromMessage(payloadCopy);
+            extracted = TracingBridge.extractFromMessage(payload);
         } catch (Throwable ignored) {
             /* fall through */ }
 
-        // 2) If that failed, try JSON (accept both traceparent/traceParent)
+        // 2) Fallback: extract from JSON keys
         if (extracted == null || !Span.fromContext(extracted).getSpanContext().isValid()) {
-            Map<String, String> carrier = tryExtractFromJson(payloadCopy);
+            Map<String, String> carrier = tryExtractFromJson(payload);
             if (!carrier.isEmpty()) {
                 extracted = GlobalOpenTelemetry.getPropagators()
                         .getTextMapPropagator()
@@ -194,13 +216,9 @@ public class MqttConsumer {
         }
         if (extracted == null)
             extracted = Context.root();
-
         boolean hasParent = Span.fromContext(extracted).getSpanContext().isValid();
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debugf("MQTT extracted parent valid? %s", hasParent);
-        }
 
-        // ---- SPAN A: mqtt.receive (keep OPEN while processing)
+        // ---- SPAN A: mqtt.receive (short parent)
         var receiveSpan = tracer.spanBuilder("mqtt.receive")
                 .setSpanKind(SpanKind.CONSUMER)
                 .setParent(hasParent ? extracted : Context.root())
@@ -210,24 +228,50 @@ public class MqttConsumer {
                 .setAttribute("messaging.destination", topic)
                 .setAttribute("net.peer.name", brokerHost == null ? "unknown" : brokerHost)
                 .setAttribute("net.peer.port", brokerPort == null ? 0 : brokerPort)
-                .setAttribute("messaging.message_payload_size_bytes", payloadCopy == null ? 0 : payloadCopy.length)
+                .setAttribute("messaging.message_payload_size_bytes", payload == null ? 0 : payload.length)
                 .startSpan();
 
         try (Scope receiveScope = receiveSpan.makeCurrent()) {
             MqttSendMessage obj = null;
+
+            // ---- SPAN B: deserialize (child)
             if (deserializeEnabled) {
-                obj = deserializeJson(payloadCopy);
+                var deserSpan = tracer.spanBuilder("mqtt.deserialize")
+                        .setSpanKind(SpanKind.INTERNAL)
+                        .startSpan();
+                try (Scope s = deserSpan.makeCurrent()) {
+                    obj = deserializeJson(payload);
+                    deserSpan.setStatus(StatusCode.OK);
+                } catch (Throwable e) {
+                    deserSpan.recordException(e);
+                    deserSpan.setStatus(StatusCode.ERROR, "JSON deserialization failure");
+                    throw e;
+                } finally {
+                    deserSpan.end();
+                }
             }
 
-            if (deserializeEnabled) {
-                if (obj != null) {
-                    processMessage(topic, payloadCopy, obj);
+            // ---- SPAN C: process (child)
+            var procSpan = tracer.spanBuilder("mqtt.process")
+                    .setSpanKind(SpanKind.CONSUMER)
+                    .startSpan();
+            try (Scope s = procSpan.makeCurrent()) {
+                if (deserializeEnabled) {
+                    if (obj != null)
+                        processMessage(topic, payload, obj);
+                    else
+                        LOGGER.warn("Deserialization returned null");
                 } else {
-                    LOGGER.warn("Deserialization returned null");
+                    LOGGER.infof("MQTT message on %s len=%d (deserialize disabled)", topic,
+                            payload == null ? 0 : payload.length);
                 }
-            } else {
-                LOGGER.infof("MQTT message on %s len=%d (deserialize disabled)", topic,
-                        payloadCopy == null ? 0 : payloadCopy.length);
+                procSpan.setStatus(StatusCode.OK);
+            } catch (Throwable e) {
+                procSpan.recordException(e);
+                procSpan.setStatus(StatusCode.ERROR, e.getMessage());
+                throw e;
+            } finally {
+                procSpan.end();
             }
 
             receiveSpan.setStatus(StatusCode.OK);
@@ -236,7 +280,7 @@ public class MqttConsumer {
             receiveSpan.setStatus(StatusCode.ERROR, outer.getMessage());
             throw outer;
         } finally {
-            receiveSpan.end(); // end parent AFTER child so UI nests correctly
+            receiveSpan.end();
         }
     }
 
@@ -246,9 +290,8 @@ public class MqttConsumer {
             return carrier;
         try {
             JsonNode n = objectMapper.readTree(bytes);
-            // accept both cases
-            JsonNode tp = n.hasNonNull("traceparent") ? n.get("traceparent") : n.get("traceParent");
-            JsonNode ts = n.hasNonNull("tracestate") ? n.get("tracestate") : n.get("traceState");
+            var tp = n.hasNonNull("traceparent") ? n.get("traceparent") : n.get("traceParent");
+            var ts = n.hasNonNull("tracestate") ? n.get("tracestate") : n.get("traceState");
             if (tp != null && !tp.asText().isBlank())
                 carrier.put("traceparent", tp.asText());
             if (ts != null && !ts.asText().isBlank())
@@ -258,16 +301,16 @@ public class MqttConsumer {
         return carrier;
     }
 
-    private void fastNoTracing(String topic, byte[] payloadCopy) {
+    private void fastNoTracing(String topic, byte[] payload) {
         if (deserializeEnabled) {
-            MqttSendMessage obj = deserializeJson(payloadCopy);
+            MqttSendMessage obj = deserializeJson(payload);
             if (obj != null)
-                processMessage(topic, payloadCopy, obj);
+                processMessage(topic, payload, obj);
             else
                 LOGGER.warn("Deserialization returned null");
         } else {
             LOGGER.infof("MQTT message on %s len=%d (tracing off, no deserialize)",
-                    topic, payloadCopy == null ? 0 : payloadCopy.length);
+                    topic, payload == null ? 0 : payload.length);
         }
     }
 
@@ -277,6 +320,7 @@ public class MqttConsumer {
         if (preview != null && preview.length() > 120)
             preview = preview.substring(0, 120) + "...";
         LOGGER.infof("MQTT consumed: topic=%s len=%d message=%s", topic, len, String.valueOf(preview));
+        // TODO: your business logic here (forward to Kafka, etc.)
     }
 
     private MqttSendMessage deserializeJson(byte[] data) {

@@ -51,7 +51,6 @@ public class KafkaSend {
         props.put("value.serializer", "org.acme.tracing.messageparams.MqttSendMessageSerializer"); // custom serializer
         props.put("acks", "all");
 
-        // Optional security
         if (!isBlank(securityProtocol))
             props.put("security.protocol", securityProtocol);
         if (!isBlank(saslMechanism))
@@ -63,32 +62,33 @@ public class KafkaSend {
         if (!isBlank(truststorePassword))
             props.put("ssl.truststore.password", truststorePassword);
 
-        // (Optional) throughput-friendly defaults; uncomment if you want
-        // batching/compression
-        // props.putIfAbsent("linger.ms", "5");
-        // props.putIfAbsent("batch.size", String.valueOf(32 * 1024));
-        // props.putIfAbsent("compression.type", "lz4");
-
         kafkaProducer = new KafkaProducer<>(props);
     }
 
-    public void sendMessage(MqttSendMessage message, String key, String topic) {
+    /** Backward-compatible: no header, no key */
+    public void sendMessage(MqttSendMessage message, String topic) {
+        sendMessage(message, null, topic, null);
+    }
+
+    /** New: attach key and the x-mqtt-topic header to the outgoing record */
+    public void sendMessage(MqttSendMessage message, String key, String topic, String mqttTopicHeader) {
         try {
             ProducerRecord<String, MqttSendMessage> record = new ProducerRecord<>(topic, key, message);
+            if (mqttTopicHeader != null && !mqttTopicHeader.isBlank()) {
+                record.headers().remove("x-mqtt-topic");
+                record.headers().add("x-mqtt-topic", mqttTopicHeader.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
 
-            // Synchronous send (simple & predictable)
             Future<RecordMetadata> future = kafkaProducer.send(record);
             RecordMetadata metadata = future.get();
 
-            final long recvEpochMs = System.currentTimeMillis();
-
-            final long recvNano = System.nanoTime();
-            LOGGER.infof("Envio kafka: sentEpochMs=%d sentNano=%d", recvEpochMs, recvNano);
-
-            LOGGER.infof("Kafka message sent: topic=%s, partition=%d, offset=%d%n",
+            final long nowMs = System.currentTimeMillis();
+            final long nowNs = System.nanoTime();
+            LOGGER.infof("Envio kafka: sentEpochMs=%d sentNano=%d", nowMs, nowNs);
+            LOGGER.infof("Kafka message sent: topic=%s, partition=%d, offset=%d",
                     metadata.topic(), metadata.partition(), metadata.offset());
         } catch (Exception e) {
-            LOGGER.errorf("Failed to send Kafka message: " + e.getMessage());
+            LOGGER.errorf("Failed to send Kafka message: %s", e.getMessage());
         }
     }
 

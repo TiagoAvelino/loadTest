@@ -1,14 +1,19 @@
 package org.acme.kafka;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+import org.acme.mqtt.MqttProducer;
 import org.acme.tracing.TracingBridge;
 import org.acme.tracing.messageparams.MqttSendMessage;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.apache.kafka.common.header.Header;
 import org.eclipse.microprofile.reactive.messaging.Incoming;
 import org.jboss.logging.Logger;
 
@@ -21,31 +26,43 @@ import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
-import io.smallrye.reactive.messaging.kafka.KafkaClientService;
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class KafkaMessageConsumer {
+
     private static final Logger LOGGER = Logger.getLogger(KafkaMessageConsumer.class.getName());
 
-    @ConfigProperty(name = "mqtt.topic.pattern")
-    String mqttTopicPattern;
-
-    @ConfigProperty(name = "kafka.tracing.enabled", defaultValue = "true")
-    boolean tracingEnabled;
-
-    @Inject
-    KafkaClientService kafkaClientService;
-    @Inject
-    KafkaSend kafkaSend;
     @Inject
     Tracer tracer;
+    @Inject
+    MqttProducer mqttProducer;
 
-    private final ExecutorService cleanupExecutor = Executors.newSingleThreadExecutor();
+    // Build MQTT broker URL from ordinal: String.format(brokerPattern, ordinal)
+    @jakarta.inject.Inject
+    @org.eclipse.microprofile.config.inject.ConfigProperty(name = "app.mqtt.brokerPattern")
+    String brokerPattern;
 
-    // Fallback extractor from value fields (traceparent/tracestate) when no Kafka
-    // headers exist
+    // ---- W3C Propagation helpers (unchanged) ----
+    private static final TextMapGetter<ConsumerRecord<String, MqttSendMessage>> KAFKA_GETTER = new TextMapGetter<>() {
+        @Override
+        public Iterable<String> keys(ConsumerRecord<String, MqttSendMessage> carrier) {
+            List<String> keys = new ArrayList<>();
+            if (carrier == null || carrier.headers() == null)
+                return keys;
+            for (Header h : carrier.headers())
+                keys.add(h.key());
+            return keys;
+        }
+
+        @Override
+        public String get(ConsumerRecord<String, MqttSendMessage> carrier, String key) {
+            if (carrier == null || key == null)
+                return null;
+            Header h = carrier.headers().lastHeader(key);
+            return (h == null) ? null : new String(h.value(), StandardCharsets.UTF_8);
+        }
+    };
+
     private static final TextMapGetter<Map<String, String>> MAP_GETTER = new TextMapGetter<>() {
         @Override
         public Iterable<String> keys(Map<String, String> carrier) {
@@ -58,21 +75,16 @@ public class KafkaMessageConsumer {
         }
     };
 
-    @Incoming("app.test.push")
-    public void consume(ConsumerRecord<String, MqttSendMessage> record) {
+    @Incoming("kafka-channel")
+    public MqttSendMessage consumeMessages(ConsumerRecord<String, MqttSendMessage> record) {
         final String key = record.key();
-        final String topic = record.topic();
-        final long nowMs = System.currentTimeMillis();
-        final long nowNs = System.nanoTime();
-        LOGGER.infof("Consumo kafka: sentEpochMs=%d sentNano=%d", nowMs, nowNs);
+        final String kafkaTopic = record.topic();
 
-        if (!tracingEnabled) {
-            processRecord(record, /* parentCtx */ Context.root());
-            return;
-        }
+        // ---- Extract parent trace ----
+        Context extracted = GlobalOpenTelemetry.getPropagators()
+                .getTextMapPropagator()
+                .extract(Context.root(), record, KAFKA_GETTER);
 
-        // Extract upstream context (prefer headers; fallback to value)
-        Context extracted = TracingBridge.extractFromKafkaHeaders(record.headers());
         if (!Span.fromContext(extracted).getSpanContext().isValid()) {
             MqttSendMessage v = record.value();
             if (v != null && (v.getTraceParent() != null || v.getTraceState() != null)) {
@@ -88,147 +100,93 @@ public class KafkaMessageConsumer {
         }
         boolean hasParent = Span.fromContext(extracted).getSpanContext().isValid();
 
-        // (1) very short receive span
-        var recvBuilder = TracingBridge.kafkaConsumerSpan(
-                tracer, hasParent ? extracted : Context.root(), topic, key);
-        if (!hasParent)
-            recvBuilder.setNoParent();
-
-        var receiveSpan = recvBuilder
+        // ---- Span: kafka.receive ----
+        var receiveSpan = tracer.spanBuilder("kafka.receive")
+                .setSpanKind(SpanKind.CONSUMER)
+                .setParent(hasParent ? extracted : Context.root())
+                .setAttribute("messaging.system", "kafka")
+                .setAttribute("messaging.operation", "receive")
+                .setAttribute("messaging.destination_kind", "topic")
+                .setAttribute("messaging.destination", kafkaTopic)
                 .setAttribute("messaging.kafka.partition", record.partition())
                 .setAttribute("messaging.kafka.offset", record.offset())
-                .setAttribute("messaging.kafka.consumer_group", "app.test.push")
-                .setAttribute("messaging.message_payload_size_bytes",
-                        record.value() == null ? 0 : record.value().serialize().length)
                 .startSpan();
 
-        Context receiveCtx = Context.current().with(receiveSpan);
-        try {
-            long lagMs = (record.timestamp() > 0) ? (System.currentTimeMillis() - record.timestamp()) : -1L;
-            if (lagMs >= 0)
-                receiveSpan.setAttribute("messaging.kafka.lag_ms", lagMs);
-            receiveSpan.setStatus(StatusCode.OK);
-        } catch (Exception e) {
-            receiveSpan.recordException(e);
-            receiveSpan.setStatus(StatusCode.ERROR, e.getMessage());
-        } finally {
-            receiveSpan.end();
-        }
-
-        // (2) process span
-        var processSpan = tracer.spanBuilder("kafka.process")
-                .setSpanKind(SpanKind.INTERNAL)
-                .setParent(receiveCtx)
-                .startSpan();
-
-        try (Scope ps = processSpan.makeCurrent()) {
-            processRecord(record, receiveCtx);
-            processSpan.setStatus(StatusCode.OK);
-        } catch (Exception e) {
-            processSpan.recordException(e);
-            processSpan.setStatus(StatusCode.ERROR, e.getMessage());
-            throw e;
-        } finally {
-            processSpan.end();
-        }
-    }
-
-    private void processRecord(ConsumerRecord<String, MqttSendMessage> record, Context parentCtx) {
-        final String key = record.key();
-
-        try {
-            pauseConsumer("app.test.push");
-
-            MqttSendMessage message = record.value();
-            if (message == null) {
-                message = new MqttSendMessage();
-                message.setMessage("Message Nula");
-            } else {
-                message.setMessage(message.getMessage() + " Mensagem consumida");
-            }
-
-            System.out.printf("Message: %s e host: %s%n", message.getMessage(), message.getHost());
-
-            // Compute the MQTT topic you want to propagate
-            String mqttTopic = String.format(mqttTopicPattern, key, record.topic()).replace(".", "/");
-
-            // Choose the Kafka topic you’re sending to (you had host there; keep if
-            // intended)
-            String kafkaTopic = record.value().getHost();
-
-            if (tracingEnabled) {
-                var produceSpan = TracingBridge
-                        .kafkaProducerSpan(tracer, kafkaTopic, /* key */ key, /* bootstrapServers */ null)
-                        .setParent(Context.current())
-                        .startSpan();
-                try (Scope ps = produceSpan.makeCurrent()) {
-                    TracingBridge.injectIntoMessage(message);
-
-                    // ✅ Send with header attached on the ProducerRecord
-                    kafkaSend.sendMessage(message, key, kafkaTopic, mqttTopic);
-
-                    produceSpan.setAttribute("messaging.mqtt.topic", mqttTopic);
-                    produceSpan.setStatus(StatusCode.OK);
-                } catch (Exception e) {
-                    produceSpan.recordException(e);
-                    produceSpan.setStatus(StatusCode.ERROR, e.getMessage());
-                    throw e;
-                } finally {
-                    produceSpan.end();
-                }
-            } else {
-                TracingBridge.injectIntoMessage(message);
-                // ✅ Send with header attached on the ProducerRecord
-                kafkaSend.sendMessage(message, key, kafkaTopic, mqttTopic);
-            }
-
-            System.out.println(message);
-        } catch (Exception e) {
-            System.err.println("Erro ao processar mensagem Kafka:");
-            e.printStackTrace();
-        } finally {
-            resumeConsumer("app.test.push");
-        }
-    }
-
-    private void pauseConsumer(String channel) {
-        try {
-            kafkaClientService.getConsumer(channel).pause();
-            System.out.println("Consumo pausado para o canal: " + channel);
-        } catch (Exception e) {
-            System.err.println("Erro ao pausar o consumidor para o canal " + channel + ":");
-            e.printStackTrace();
-        }
-    }
-
-    private void resumeConsumer(String channel) {
-        try {
-            kafkaClientService.getConsumer(channel).resume();
-        } catch (Exception e) {
-            System.err.println("Erro ao retomar o consumidor para o canal " + channel + ":");
-            e.printStackTrace();
-        }
-    }
-
-    public void onPartitionsRevoked() {
-        System.out.println("Partitions are being revoked, committing offsets and cleaning up...");
-        cleanupExecutor.submit(() -> {
+        try (Scope scope = receiveSpan.makeCurrent()) {
             try {
-                System.out.println("Quick cleanup tasks for revoked partitions...");
-            } catch (Exception e) {
-                System.err.println("Error during partition cleanup:");
-                e.printStackTrace();
+                long lagMs = (record.timestamp() > 0) ? (System.currentTimeMillis() - record.timestamp()) : -1L;
+                if (lagMs >= 0)
+                    receiveSpan.setAttribute("messaging.kafka.lag_ms", lagMs);
+                receiveSpan.setStatus(StatusCode.OK);
+            } catch (Throwable t) {
+                receiveSpan.recordException(t);
+                receiveSpan.setStatus(StatusCode.ERROR, "receive metadata error");
+            } finally {
+                receiveSpan.end();
             }
-        });
+
+            // ---- Span: kafka.process ----
+            Span processSpan = tracer.spanBuilder("kafka.process")
+                    .setSpanKind(SpanKind.INTERNAL)
+                    .startSpan();
+
+            try (Scope ps = processSpan.makeCurrent()) {
+                MqttSendMessage message = record.value();
+                if (message == null || message.getMessage() == null) {
+                    message = new MqttSendMessage();
+                    message.setMessage("Message Nula");
+                }
+
+                var header = record.headers().lastHeader("x-mqtt-topic");
+                String mqttTopic = (header == null) ? null : new String(header.value(), StandardCharsets.UTF_8);
+
+                // Map Kafka topic "mqtt-service-<N>" → MQTT broker "mqtt-server-<N>"
+                int ord = extractOrdinal(kafkaTopic);
+                if (ord < 0) {
+                    String err = "Kafka topic must match 'mqtt-service-<N>' but was: " + kafkaTopic;
+                    LOGGER.error(err);
+                    processSpan.setStatus(StatusCode.ERROR, err);
+                    return message;
+                }
+                String targetBrokerUrl = String.format(brokerPattern, ord);
+
+                // Force this publish to that broker (override)
+                message.setHost(targetBrokerUrl);
+
+                LOGGER.infof("Consume key=%s topic=%s -> broker=%s, mqttTopic=%s, len=%d",
+                        key, kafkaTopic, targetBrokerUrl, mqttTopic,
+                        message.getMessage() == null ? 0 : message.getMessage().length());
+
+                // Propagate tracing downstream into MQTT
+                TracingBridge.injectIntoMessage(message);
+
+                // Publish (MqttProducer reads message.host and honors it)
+                mqttProducer.setTopic(mqttTopic);
+                mqttProducer.produce(message);
+
+                processSpan.setStatus(StatusCode.OK);
+                return message;
+
+            } catch (Exception e) {
+                processSpan.recordException(e);
+                processSpan.setStatus(StatusCode.ERROR, e.getMessage());
+                throw e;
+            } finally {
+                processSpan.end();
+            }
+        }
     }
 
-    public void gracefulShutdown() {
+    private static int extractOrdinal(String topic) {
+        if (topic == null)
+            return -1;
+        int dash = topic.lastIndexOf('-');
+        if (dash < 0 || dash + 1 >= topic.length())
+            return -1;
         try {
-            System.out.println("Shutting down gracefully...");
-            cleanupExecutor.shutdownNow();
-        } catch (Exception e) {
-            System.err.println("Error during graceful shutdown:");
-            e.printStackTrace();
+            return Integer.parseInt(topic.substring(dash + 1));
+        } catch (NumberFormatException e) {
+            return -1;
         }
     }
 }
