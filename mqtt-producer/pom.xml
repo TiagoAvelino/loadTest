@@ -50,10 +50,25 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-arc</artifactId>
         </dependency>
+        <!-- <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-vertx</artifactId>
+        </dependency> -->
+
+        <!-- Vert.x MQTT client (version is managed by the Quarkus BOM, so no <version/>) -->
         <dependency>
-            <groupId>org.eclipse.paho</groupId>
-            <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
-            <version>1.2.5</version>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-mqtt</artifactId>
+        </dependency>
+
+        <!-- Keep these for your SmallRye consumer (you already have them) -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-messaging</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-messaging-mqtt</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>

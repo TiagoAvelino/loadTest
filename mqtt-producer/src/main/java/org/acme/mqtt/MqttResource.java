@@ -17,7 +17,7 @@ import jakarta.ws.rs.core.Response;
 public class MqttResource {
 
     @Inject
-    MqttClientService mqttClientService;
+    ReactiveMqttProducer mqttClientService;
 
     @POST
     @Path("/send")
@@ -31,7 +31,8 @@ public class MqttResource {
         }
 
         try {
-            mqttClientService.publishMessage(topic, mqttMes);
+
+            mqttClientService.publish(topic, mqttMes);
             return Response.ok(Map.of("status", "Message sent successfully", "topic", topic)).build();
         } catch (Exception e) {
             // Ideally, use a logger here instead of System.out

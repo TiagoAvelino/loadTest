@@ -1,25 +1,16 @@
 package org.acme.mqtt;
 
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-import javax.net.SocketFactory;
+import java.util.concurrent.CompletionStage;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.acme.tracing.TracingBridge;
 import org.acme.tracing.messageparams.MqttSendMessage;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.eclipse.paho.client.mqttv3.IMqttActionListener;
-import org.eclipse.paho.client.mqttv3.IMqttAsyncClient;
-import org.eclipse.paho.client.mqttv3.IMqttToken;
-import org.eclipse.paho.client.mqttv3.MqttAsyncClient;
-import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
-import org.eclipse.paho.client.mqttv3.MqttException;
-import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
+import org.eclipse.microprofile.reactive.messaging.Incoming;
+import org.eclipse.microprofile.reactive.messaging.Message;
 import org.jboss.logging.Logger;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -28,77 +19,43 @@ import com.fasterxml.jackson.databind.ObjectReader;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
-
-import io.quarkus.runtime.Startup;
-import io.quarkus.runtime.StartupEvent;
-import io.quarkus.runtime.annotations.RegisterForReflection;
-import jakarta.annotation.PreDestroy;
+import io.smallrye.reactive.messaging.annotations.Blocking;
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 
-@Startup(20)
-@RegisterForReflection
 @ApplicationScoped
 public class MqttConsumer {
 
     private static final Logger LOGGER = Logger.getLogger(MqttConsumer.class);
 
-    @ConfigProperty(name = "POD_NAME")
-    String podName;
-    @ConfigProperty(name = "SERVICE")
-    String service;
-
-    @ConfigProperty(name = "mqtt.consumer.topic", defaultValue = "mqtt-message-in/1/2/app/test/push")
-    String consumerTopic;
-
-    @ConfigProperty(name = "mqtt.keepalive.seconds", defaultValue = "20")
-    int keepAliveSeconds;
-    @ConfigProperty(name = "mqtt.connect.timeout.seconds", defaultValue = "2")
-    int connectTimeoutSeconds;
-    @ConfigProperty(name = "mqtt.max.inflight", defaultValue = "5000")
-    int maxInflight;
-
     @ConfigProperty(name = "mqtt.consumer.deserialize.enabled", defaultValue = "true")
     boolean deserializeEnabled;
-
-    @ConfigProperty(name = "mqtt.socket.send.buf.bytes", defaultValue = "262144")
-    int soSndBuf;
-    @ConfigProperty(name = "mqtt.socket.recv.buf.bytes", defaultValue = "262144")
-    int soRcvBuf;
-
-    @ConfigProperty(name = "mqtt.consumer.parallelism", defaultValue = "4")
-    int parallelism;
-
-    @ConfigProperty(name = "mqtt.consumer.copy.payload", defaultValue = "false")
-    boolean copyPayload;
 
     @ConfigProperty(name = "mqtt.tracing.enabled", defaultValue = "true")
     boolean tracingEnabled;
 
+    // Tag the receive span with the configured subscription (connector doesn’t
+    // expose inbound metadata)
+    @ConfigProperty(name = "mp.messaging.incoming.mqtt-in.topic", defaultValue = "unknown")
+    String configuredSubscription;
+
     @Inject
     Tracer tracer;
+
     @Inject
     ObjectMapper objectMapper;
+
     private ObjectReader mqttMessageReader;
 
-    private IMqttAsyncClient client;
-    private String brokerUrl;
-    private ExecutorService workerPool;
-
-    private String brokerHost;
-    private Integer brokerPort;
-
-    // small bounded queue advisory (optional)
-    private ArrayBlockingQueue<Runnable> workQueue;
-
-    // Getter to extract from a simple map carrier
+    // TextMapGetter for Map-based carrier
     private static final TextMapGetter<Map<String, String>> MAP_GETTER = new TextMapGetter<>() {
         @Override
         public Iterable<String> keys(Map<String, String> carrier) {
@@ -111,222 +68,241 @@ public class MqttConsumer {
         }
     };
 
-    public void onStart(@Observes StartupEvent ev) {
-        brokerUrl = resolveBrokerUrlFromPodName(podName, service);
-        brokerHost = brokerUrlHost(brokerUrl);
-        long p = brokerUrlPort(brokerUrl);
-        brokerPort = (p > 0 && p <= Integer.MAX_VALUE) ? (int) p : null;
+    // Lenient regex for last-resort extraction (case-insensitive keys)
+    private static final Pattern TP_RE = Pattern.compile("\"traceparent\"\\s*:\\s*\"([^\"]+)\"",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern TS_RE = Pattern.compile("\"tracestate\"\\s*:\\s*\"([^\"]+)\"",
+            Pattern.CASE_INSENSITIVE);
 
+    @PostConstruct
+    void init() {
         mqttMessageReader = objectMapper.readerFor(MqttSendMessage.class);
-
-        LOGGER.infof("MQTT consumer broker URL: %s; subscribing to: %s", brokerUrl, consumerTopic);
-        init();
     }
 
-    private void init() {
-        try {
-            client = new MqttAsyncClient(brokerUrl, MqttAsyncClient.generateClientId(), new MemoryPersistence());
+    @Incoming("mqtt-in")
+    @Blocking("mqtt-consumer")
+    public CompletionStage<Void> consume(Message<byte[]> msg) {
+        final byte[] wire = msg.getPayload();
 
-            MqttConnectOptions opts = new MqttConnectOptions();
-            opts.setCleanSession(true);
-            opts.setAutomaticReconnect(true);
-            opts.setKeepAliveInterval(Math.max(10, keepAliveSeconds));
-            opts.setConnectionTimeout(Math.max(1, connectTimeoutSeconds));
-            opts.setMaxInflight(Math.max(1000, maxInflight));
-            // MQTT 3.1.1 is broadly fastest/most compatible
-            opts.setMqttVersion(MqttConnectOptions.MQTT_VERSION_3_1_1);
-            opts.setSocketFactory(new TcpNoDelaySocketFactory(
-                    opts.getConnectionTimeout(), Math.max(0, soSndBuf), Math.max(0, soRcvBuf)));
+        // Raw preview: shows the SmallRye wrapper if present
+        if (LOGGER.isDebugEnabled()) {
+            final String raw = wire == null ? "null" : new String(wire, java.nio.charset.StandardCharsets.UTF_8);
+            LOGGER.debugf("CONSUMER raw payload: %s%s",
+                    raw == null ? "null" : raw.substring(0, Math.min(raw.length(), 512)),
+                    (raw != null && raw.length() > 512) ? "..." : "");
+        }
 
-            IMqttToken tok = client.connect(opts);
-            tok.waitForCompletion(Math.max(1000, connectTimeoutSeconds * 1000 + 500));
-            LOGGER.infof("MQTT consumer connected %s (inflight=%d snd=%d rcv=%d)",
-                    brokerUrl, opts.getMaxInflight(), soSndBuf, soRcvBuf);
+        // Unwrap connector envelope → inner JSON we serialized on the producer
+        final byte[] inner = unwrapIfWrapped(wire);
 
-            parallelism = Math.max(1, parallelism);
-            // small bounded queue → quick signal if we’re falling behind
-            workQueue = new ArrayBlockingQueue<>(parallelism * 256);
-            workerPool = Executors.newFixedThreadPool(parallelism, r -> {
-                var t = new Thread(r, "mqtt-consumer-worker");
-                t.setDaemon(true);
-                return t;
-            });
+        // ---- Extract parent context (Bridge → JSON → Regex)
+        Context parent = Context.root();
+        boolean hasParent = false;
 
-            final String topic = consumerTopic;
-            client.subscribe(topic, 0, null, new IMqttActionListener() {
-                @Override
-                public void onSuccess(IMqttToken a) {
-                    LOGGER.infof("Subscribed to %s (QoS0)", topic);
-                }
+        if (tracingEnabled && inner != null && inner.length > 0) {
+            // A) Your custom bridge (first choice)
+            try {
+                parent = TracingBridge.extractFromMessage(inner);
+                hasParent = Span.fromContext(parent).getSpanContext().isValid();
+                LOGGER.debugf("CONSUMER bridge parent valid? %s", hasParent);
+            } catch (Throwable ignored) {
+                // best-effort
+            }
 
-                @Override
-                public void onFailure(IMqttToken a, Throwable e) {
-                    LOGGER.error("Subscribe failed: " + topic, e);
-                }
-            }, (t, msg) -> {
-                final byte[] payload = msg.getPayload();
-                // zero-copy is safe if we fully process inside this task (Paho won’t reuse the
-                // array)
-                final byte[] data = (copyPayload && payload != null)
-                        ? java.util.Arrays.copyOf(payload, payload.length)
-                        : payload;
-
-                Runnable task = () -> handleMessageWithTracing(t, data);
-                // try bounded queue to avoid unbounded latency growth
-                if (!workQueue.offer(task)) {
-                    // queue full: drop oldest or log; here we log (you can also run in caller)
-                    LOGGER.warn("Consumer work queue saturated; executing in caller (may increase callback time).");
-                    task.run();
+            // B) Fallback: try to read traceparent/tracestate from the inner JSON
+            if (!hasParent) {
+                Map<String, String> carrier = tryExtractMapFromInnerJson(inner);
+                if (carrier.isEmpty()) {
+                    LOGGER.debug("CONSUMER fallback carrier is empty (no trace headers in JSON).");
                 } else {
-                    // pull off queue in workers
-                    workerPool.execute(workQueue.poll());
-                }
-            });
-
-        } catch (MqttException e) {
-            LOGGER.error("MQTT connect/subscribe failed", e);
-        }
-    }
-
-    private void handleMessageWithTracing(String topic, byte[] payload) {
-        if (!tracingEnabled) {
-            fastNoTracing(topic, payload);
-            return;
-        }
-
-        // 1) Try your bridge
-        Context extracted = null;
-        try {
-            extracted = TracingBridge.extractFromMessage(payload);
-        } catch (Throwable ignored) {
-            /* fall through */ }
-
-        // 2) Fallback: extract from JSON keys
-        if (extracted == null || !Span.fromContext(extracted).getSpanContext().isValid()) {
-            Map<String, String> carrier = tryExtractFromJson(payload);
-            if (!carrier.isEmpty()) {
-                extracted = GlobalOpenTelemetry.getPropagators()
-                        .getTextMapPropagator()
-                        .extract(Context.root(), carrier, MAP_GETTER);
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debugf("Extracted W3C context from JSON: tp=%s ts=%s",
-                            carrier.get("traceparent"), carrier.get("tracestate"));
+                    parent = GlobalOpenTelemetry.getPropagators()
+                            .getTextMapPropagator()
+                            .extract(Context.root(), carrier, MAP_GETTER);
+                    hasParent = Span.fromContext(parent).getSpanContext().isValid();
                 }
             }
         }
-        if (extracted == null)
-            extracted = Context.root();
-        boolean hasParent = Span.fromContext(extracted).getSpanContext().isValid();
 
-        // ---- SPAN A: mqtt.receive (short parent)
-        var receiveSpan = tracer.spanBuilder("mqtt.receive")
+        if (LOGGER.isDebugEnabled()) {
+            if (hasParent) {
+                SpanContext sc = Span.fromContext(parent).getSpanContext();
+                LOGGER.debugf("MQTT CONSUME join traceId=%s spanId=%s topic=%s",
+                        sc.getTraceId(), sc.getSpanId(), configuredSubscription);
+            } else {
+                LOGGER.debug("MQTT CONSUME has NO valid remote context → new root");
+            }
+        }
+
+        // ---- Build the receive span with the correct parent
+        var receiveBuilder = tracer.spanBuilder("mqtt.receive")
                 .setSpanKind(SpanKind.CONSUMER)
-                .setParent(hasParent ? extracted : Context.root())
                 .setAttribute("messaging.system", "mqtt")
                 .setAttribute("messaging.operation", "receive")
                 .setAttribute("messaging.destination_kind", "topic")
-                .setAttribute("messaging.destination", topic)
-                .setAttribute("net.peer.name", brokerHost == null ? "unknown" : brokerHost)
-                .setAttribute("net.peer.port", brokerPort == null ? 0 : brokerPort)
-                .setAttribute("messaging.message_payload_size_bytes", payload == null ? 0 : payload.length)
-                .startSpan();
+                .setAttribute("messaging.destination", configuredSubscription)
+                .setAttribute("messaging.message_payload_size_bytes", inner == null ? 0 : inner.length);
 
-        try (Scope receiveScope = receiveSpan.makeCurrent()) {
+        if (hasParent)
+            receiveBuilder.setParent(parent);
+        else
+            receiveBuilder.setNoParent();
+
+        var receiveSpan = receiveBuilder.startSpan();
+
+        CompletionStage<Void> completion;
+        try (Scope ignored = receiveSpan.makeCurrent()) {
             MqttSendMessage obj = null;
 
-            // ---- SPAN B: deserialize (child)
             if (deserializeEnabled) {
-                var deserSpan = tracer.spanBuilder("mqtt.deserialize")
-                        .setSpanKind(SpanKind.INTERNAL)
-                        .startSpan();
-                try (Scope s = deserSpan.makeCurrent()) {
-                    obj = deserializeJson(payload);
-                    deserSpan.setStatus(StatusCode.OK);
+                var deser = tracer.spanBuilder("mqtt.deserialize").setSpanKind(SpanKind.INTERNAL).startSpan();
+                try (Scope s = deser.makeCurrent()) {
+                    obj = deserializeJson(inner);
+                    deser.setStatus(StatusCode.OK);
                 } catch (Throwable e) {
-                    deserSpan.recordException(e);
-                    deserSpan.setStatus(StatusCode.ERROR, "JSON deserialization failure");
+                    deser.recordException(e);
+                    deser.setStatus(StatusCode.ERROR, "JSON deserialization failure");
                     throw e;
                 } finally {
-                    deserSpan.end();
+                    deser.end();
                 }
             }
 
-            // ---- SPAN C: process (child)
-            var procSpan = tracer.spanBuilder("mqtt.process")
-                    .setSpanKind(SpanKind.CONSUMER)
-                    .startSpan();
-            try (Scope s = procSpan.makeCurrent()) {
-                if (deserializeEnabled) {
-                    if (obj != null)
-                        processMessage(topic, payload, obj);
-                    else
-                        LOGGER.warn("Deserialization returned null");
-                } else {
-                    LOGGER.infof("MQTT message on %s len=%d (deserialize disabled)", topic,
-                            payload == null ? 0 : payload.length);
+            var proc = tracer.spanBuilder("mqtt.process").setSpanKind(SpanKind.CONSUMER).startSpan();
+            try (Scope s = proc.makeCurrent()) {
+                if (deserializeEnabled && obj != null) {
+                    // TODO: your business logic
+                    if (LOGGER.isDebugEnabled()) {
+                        LOGGER.debugf("CONSUMER POJO traceparent='%s' tracestate='%s' message='%s'",
+                                obj.getTraceParent(), obj.getTraceState(), obj.getMessage());
+                    }
                 }
-                procSpan.setStatus(StatusCode.OK);
+                proc.setStatus(StatusCode.OK);
             } catch (Throwable e) {
-                procSpan.recordException(e);
-                procSpan.setStatus(StatusCode.ERROR, e.getMessage());
+                proc.recordException(e);
+                proc.setStatus(StatusCode.ERROR, e.getMessage());
                 throw e;
             } finally {
-                procSpan.end();
+                proc.end();
             }
 
             receiveSpan.setStatus(StatusCode.OK);
-        } catch (Throwable outer) {
-            receiveSpan.recordException(outer);
-            receiveSpan.setStatus(StatusCode.ERROR, outer.getMessage());
-            throw outer;
+            completion = msg.ack();
+        } catch (Throwable t) {
+            receiveSpan.recordException(t);
+            receiveSpan.setStatus(StatusCode.ERROR, t.getMessage());
+            completion = msg.nack(t);
         } finally {
             receiveSpan.end();
         }
+
+        return completion;
     }
 
-    private Map<String, String> tryExtractFromJson(byte[] bytes) {
+    // ========================= Helpers =========================
+
+    /**
+     * Unwrap SmallRye MQTT envelope: {"payload":"<base64>", ...} → decode payload.
+     */
+    private byte[] unwrapIfWrapped(byte[] wire) {
+        if (wire == null || wire.length == 0)
+            return wire;
+        try {
+            JsonNode root = objectMapper.readTree(wire);
+            if (root.has("payload") && root.get("payload").isTextual()) {
+                String b64 = root.get("payload").asText();
+                try {
+                    byte[] inner = java.util.Base64.getDecoder().decode(b64);
+                    if (LOGGER.isDebugEnabled()) {
+                        String s = new String(inner, java.nio.charset.StandardCharsets.UTF_8);
+                        LOGGER.debugf("CONSUMER unwrapped inner JSON: %s%s",
+                                s.substring(0, Math.min(s.length(), 512)),
+                                s.length() > 512 ? "..." : "");
+                    }
+                    return inner;
+                } catch (IllegalArgumentException notB64) {
+                    if (LOGGER.isDebugEnabled())
+                        LOGGER.debug("CONSUMER 'payload' is not base64; using raw bytes");
+                }
+            }
+        } catch (Exception ignore) {
+            // not JSON; leave wire as-is
+        }
+        return wire;
+    }
+
+    /**
+     * Try to extract trace headers from the inner JSON; lenient casing + regex
+     * fallback.
+     */
+    private Map<String, String> tryExtractMapFromInnerJson(byte[] bytes) {
         Map<String, String> carrier = new HashMap<>(2);
         if (bytes == null || bytes.length == 0)
             return carrier;
+
+        String innerStr = null;
         try {
             JsonNode n = objectMapper.readTree(bytes);
-            var tp = n.hasNonNull("traceparent") ? n.get("traceparent") : n.get("traceParent");
-            var ts = n.hasNonNull("tracestate") ? n.get("tracestate") : n.get("traceState");
-            if (tp != null && !tp.asText().isBlank())
-                carrier.put("traceparent", tp.asText());
-            if (ts != null && !ts.asText().isBlank())
-                carrier.put("tracestate", ts.asText());
-        } catch (Exception ignore) {
+            String tp = null, ts = null;
+
+            JsonNode tpNode = n.get("traceparent");
+            if (tpNode == null)
+                tpNode = n.get("traceParent");
+            if (tpNode != null && !tpNode.isNull())
+                tp = tpNode.asText();
+
+            JsonNode tsNode = n.get("tracestate");
+            if (tsNode == null)
+                tsNode = n.get("traceState");
+            if (tsNode != null && !tsNode.isNull())
+                ts = tsNode.asText();
+
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debugf("CONSUMER JSON probe -> traceparent='%s' tracestate='%s'", tp, ts);
+            }
+
+            if (tp != null && !tp.isBlank())
+                carrier.put("traceparent", tp);
+            if (ts != null && !ts.isBlank())
+                carrier.put("tracestate", ts);
+
+            if (carrier.isEmpty()) {
+                innerStr = (innerStr != null) ? innerStr : new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+                String tp2 = matchGroup(innerStr, TP_RE);
+                String ts2 = matchGroup(innerStr, TS_RE);
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debugf("CONSUMER regex probe -> traceparent='%s' tracestate='%s'", tp2, ts2);
+                }
+                if (tp2 != null && !tp2.isBlank())
+                    carrier.put("traceparent", tp2);
+                if (ts2 != null && !ts2.isBlank())
+                    carrier.put("tracestate", ts2);
+            }
+        } catch (Exception e) {
+            innerStr = (innerStr != null) ? innerStr : new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            String tp2 = matchGroup(innerStr, TP_RE);
+            String ts2 = matchGroup(innerStr, TS_RE);
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debugf("CONSUMER regex probe (JSON fail) -> traceparent='%s' tracestate='%s'", tp2, ts2);
+            }
+            if (tp2 != null && !tp2.isBlank())
+                carrier.put("traceparent", tp2);
+            if (ts2 != null && !ts2.isBlank())
+                carrier.put("tracestate", ts2);
         }
         return carrier;
     }
 
-    private void fastNoTracing(String topic, byte[] payload) {
-        if (deserializeEnabled) {
-            MqttSendMessage obj = deserializeJson(payload);
-            if (obj != null)
-                processMessage(topic, payload, obj);
-            else
-                LOGGER.warn("Deserialization returned null");
-        } else {
-            LOGGER.infof("MQTT message on %s len=%d (tracing off, no deserialize)",
-                    topic, payload == null ? 0 : payload.length);
-        }
-    }
-
-    private void processMessage(String topic, byte[] raw, MqttSendMessage message) {
-        int len = raw == null ? 0 : raw.length;
-        String preview = message.getMessage();
-        if (preview != null && preview.length() > 120)
-            preview = preview.substring(0, 120) + "...";
-        LOGGER.infof("MQTT consumed: topic=%s len=%d message=%s", topic, len, String.valueOf(preview));
-        // TODO: your business logic here (forward to Kafka, etc.)
+    private static String matchGroup(String s, Pattern p) {
+        Matcher m = p.matcher(s);
+        return m.find() ? m.group(1) : null;
     }
 
     private MqttSendMessage deserializeJson(byte[] data) {
         try {
             if (data == null || data.length == 0)
                 return null;
+            if (mqttMessageReader == null)
+                mqttMessageReader = objectMapper.readerFor(MqttSendMessage.class);
             return mqttMessageReader.readValue(data);
         } catch (Exception e) {
             if (tracingEnabled) {
@@ -335,120 +311,6 @@ public class MqttConsumer {
             }
             LOGGER.error("Failed to deserialize JSON payload", e);
             return null;
-        }
-    }
-
-    @PreDestroy
-    public void cleanup() {
-        try {
-            if (client != null && client.isConnected())
-                client.disconnect().waitForCompletion(1000);
-        } catch (MqttException e) {
-            LOGGER.error("Failed to disconnect MQTT client", e);
-        } finally {
-            try {
-                if (client != null)
-                    client.close();
-            } catch (MqttException e) {
-                LOGGER.error("Failed to close MQTT client", e);
-            }
-        }
-        if (workerPool != null)
-            workerPool.shutdownNow();
-    }
-
-    private static String resolveBrokerUrlFromPodName(String podName, String service) {
-        int index = extractOrdinal(podName);
-        return "tcp://mqtt-server-" + index + service;
-    }
-
-    private static int extractOrdinal(String name) {
-        try {
-            return Integer.parseInt(name.replaceAll(".*-(\\d+)$", "$1"));
-        } catch (Exception e) {
-            LOGGER.warnf("Cannot extract pod index from %s, defaulting to 0", name);
-            return 0;
-        }
-    }
-
-    private static String brokerUrlHost(String brokerUrl) {
-        try {
-            String u = brokerUrl.replace("tcp://", "");
-            int i = u.indexOf(':');
-            return i > 0 ? u.substring(0, i) : u;
-        } catch (Exception e) {
-            return "unknown";
-        }
-    }
-
-    private static long brokerUrlPort(String brokerUrl) {
-        try {
-            String u = brokerUrl.replace("tcp://", "");
-            int i = u.indexOf(':');
-            return i > 0 ? Long.parseLong(u.substring(i + 1)) : -1;
-        } catch (Exception e) {
-            return -1;
-        }
-    }
-
-    /** Socket factory: TCP_NODELAY + send/recv buffers + connect timeouts. */
-    static final class TcpNoDelaySocketFactory extends SocketFactory {
-        private final int timeoutMs, sndBuf, rcvBuf;
-
-        TcpNoDelaySocketFactory(int timeoutSeconds, int sndBuf, int rcvBuf) {
-            this.timeoutMs = Math.max(1000, timeoutSeconds * 1000);
-            this.sndBuf = sndBuf;
-            this.rcvBuf = rcvBuf;
-        }
-
-        private Socket newSocket() {
-            try {
-                Socket s = new Socket();
-                s.setTcpNoDelay(true);
-                if (sndBuf > 0)
-                    s.setSendBufferSize(sndBuf);
-                if (rcvBuf > 0)
-                    s.setReceiveBufferSize(rcvBuf);
-                return s;
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        }
-
-        @Override
-        public Socket createSocket() {
-            return newSocket();
-        }
-
-        @Override
-        public Socket createSocket(String host, int port) throws java.io.IOException {
-            Socket s = newSocket();
-            s.connect(new InetSocketAddress(host, port), timeoutMs);
-            return s;
-        }
-
-        @Override
-        public Socket createSocket(java.net.InetAddress host, int port) throws java.io.IOException {
-            Socket s = newSocket();
-            s.connect(new InetSocketAddress(host, port), timeoutMs);
-            return s;
-        }
-
-        @Override
-        public Socket createSocket(String host, int port, java.net.InetAddress lh, int lp) throws java.io.IOException {
-            Socket s = newSocket();
-            s.bind(new java.net.InetSocketAddress(lh, lp));
-            s.connect(new InetSocketAddress(host, port), timeoutMs);
-            return s;
-        }
-
-        @Override
-        public Socket createSocket(java.net.InetAddress addr, int port, java.net.InetAddress la, int lp)
-                throws java.io.IOException {
-            Socket s = newSocket();
-            s.bind(new java.net.InetSocketAddress(la, lp));
-            s.connect(new InetSocketAddress(addr, port), timeoutMs);
-            return s;
         }
     }
 }

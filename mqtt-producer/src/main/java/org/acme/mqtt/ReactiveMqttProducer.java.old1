@@ -1,0 +1,240 @@
+package org.acme.mqtt;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectWriter;
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
+import io.vertx.core.Vertx;
+import io.vertx.mqtt.MqttClient;
+import io.vertx.mqtt.MqttClientOptions;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.acme.tracing.TracingBridge;
+import org.acme.tracing.messageparams.MqttSendMessage;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import java.util.HashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+@ApplicationScoped
+public class ReactiveMqttProducer {
+
+    private static final Logger LOG = Logger.getLogger(ReactiveMqttProducer.class);
+
+    @Inject
+    Tracer tracer;
+    @Inject
+    ObjectMapper mapper;
+
+    @ConfigProperty(name = "POD_NAME")
+    String podName;
+    @ConfigProperty(name = "SERVICE")
+    String service;
+
+    @ConfigProperty(name = "mqtt.keepalive.seconds", defaultValue = "20")
+    int keepAliveSeconds;
+    @ConfigProperty(name = "mqtt.connect.timeout.seconds", defaultValue = "5")
+    int connectTimeoutSeconds;
+    @ConfigProperty(name = "mqtt.socket.send.buf.bytes", defaultValue = "262144")
+    int soSndBuf;
+    @ConfigProperty(name = "mqtt.socket.recv.buf.bytes", defaultValue = "262144")
+    int soRcvBuf;
+    @ConfigProperty(name = "mqtt.tracing.enabled", defaultValue = "true")
+    boolean tracingEnabled;
+
+    private volatile MqttClient client;
+    private final AtomicBoolean connecting = new AtomicBoolean(false);
+    private volatile CompletableFuture<Void> connectFuture;
+    private ObjectWriter writer;
+
+    private String host;
+    private int port;
+
+    @PostConstruct
+    void init() {
+        writer = mapper.writerFor(MqttSendMessage.class);
+        // Resolve broker from POD_NAME + SERVICE (like your old code)
+        int index = extractOrdinal(podName);
+        // SERVICE should be like ".mqtt-server-headless.kafka.svc.cluster.local:1883"
+        String serviceVal = service == null ? "" : service.trim();
+        String fqdn;
+        Integer parsedPort = null;
+        if (!serviceVal.isBlank()) {
+            int colon = serviceVal.lastIndexOf(':');
+            if (colon > 0) {
+                fqdn = "mqtt-server-" + index + serviceVal.substring(0, colon);
+                try {
+                    parsedPort = Integer.parseInt(serviceVal.substring(colon + 1));
+                } catch (NumberFormatException ignore) {
+                }
+            } else {
+                fqdn = "mqtt-server-" + index + serviceVal;
+            }
+        } else {
+            // Fallback to env override MQTT_HOST / MQTT_PORT if you have them, else
+            // localhost
+            fqdn = System.getenv().getOrDefault("MQTT_HOST", "localhost");
+            String p = System.getenv().getOrDefault("MQTT_PORT", "1883");
+            try {
+                parsedPort = Integer.parseInt(p);
+            } catch (Exception ignore) {
+                parsedPort = 1883;
+            }
+        }
+        host = fqdn;
+        port = parsedPort != null ? parsedPort : 1883;
+        LOG.debugf("Producer broker resolved host=%s port=%d (POD_NAME=%s SERVICE=%s)", host, port, podName, service);
+    }
+
+    public void publish(String topic, MqttSendMessage payload) {
+        if (topic == null || topic.isBlank())
+            throw new IllegalArgumentException("Topic must not be null/blank");
+
+        ensureConnectedBlocking();
+
+        Span span = tracer.spanBuilder("mqtt.send")
+                .setSpanKind(SpanKind.PRODUCER)
+                .setAttribute("messaging.system", "mqtt")
+                .setAttribute("messaging.operation", "publish")
+                .setAttribute("messaging.destination_kind", "topic")
+                .setAttribute("messaging.destination", topic)
+                .startSpan();
+
+        try (Scope s = span.makeCurrent()) {
+            if (tracingEnabled) {
+                try {
+                    TracingBridge.injectIntoMessage(payload);
+                } catch (Throwable ignore) {
+                    try {
+                        var carrier = new HashMap<String, String>(2);
+                        GlobalOpenTelemetry.getPropagators().getTextMapPropagator()
+                                .inject(io.opentelemetry.context.Context.current(), carrier, java.util.Map::put);
+                        payload.setTraceParent(carrier.get("traceparent"));
+                        payload.setTraceState(carrier.get("tracestate"));
+                    } catch (Throwable t) {
+                        if (LOG.isDebugEnabled())
+                            LOG.debug("Fallback inject failed (non-fatal)", t);
+                    }
+                }
+            }
+
+            byte[] bytes = writer.writeValueAsBytes(payload);
+
+            // QoS 0, non-retained; Vert.x publish is async
+            client.publish(topic, io.vertx.core.buffer.Buffer.buffer(bytes),
+                    io.netty.handler.codec.mqtt.MqttQoS.AT_MOST_ONCE, false, false, ar -> {
+                        if (ar.succeeded()) {
+                            span.setStatus(StatusCode.OK);
+                        } else {
+                            Throwable err = ar.cause();
+                            span.recordException(err);
+                            span.setStatus(StatusCode.ERROR, err == null ? "publish failed" : err.getMessage());
+                            LOG.error("MQTT publish failed", err);
+                        }
+                        span.end();
+                    });
+
+        } catch (Exception e) {
+            span.recordException(e);
+            span.setStatus(StatusCode.ERROR, "serialize/publish exception");
+            span.end();
+            LOG.error("ReactiveMqttProducer.publish failed", e);
+        }
+    }
+
+    private void ensureConnectedBlocking() {
+        MqttClient c = client;
+        if (c != null && c.isConnected())
+            return;
+
+        CompletableFuture<Void> existing = connectFuture;
+        if (existing != null) {
+            existing.join();
+            return;
+        }
+        if (!connecting.compareAndSet(false, true)) {
+            CompletableFuture<Void> f = connectFuture;
+            if (f != null)
+                f.join();
+            return;
+        }
+
+        CompletableFuture<Void> my = new CompletableFuture<>();
+        connectFuture = my;
+
+        try {
+            Vertx vertx = Vertx.vertx();
+            // imports must be:
+            // import io.vertx.mqtt.MqttClientOptions;
+            // import io.vertx.mqtt.MqttClient;
+
+            MqttClientOptions opts = new MqttClientOptions();
+            opts.setCleanSession(true);
+            opts.setAutoGeneratedClientId(true);
+            opts.setReconnectAttempts(Integer.MAX_VALUE);
+            opts.setReconnectInterval(1000);
+
+            // These are inherited from NetClientOptions and return NetClientOptions,
+            // so DO NOT chain them; call them on their own lines like this:
+            opts.setSendBufferSize(Math.max(0, soSndBuf));
+            opts.setReceiveBufferSize(Math.max(0, soRcvBuf));
+            opts.setTcpNoDelay(true);
+
+            // Then create the client with the fully-configured options:
+
+            MqttClient newClient = MqttClient.create(vertx, opts);
+            newClient.connect(port, host, ar -> {
+                try {
+                    if (ar.succeeded()) {
+                        client = newClient;
+                        if (LOG.isDebugEnabled())
+                            LOG.debugf("MQTT producer connected %s:%d", host, port);
+                        my.complete(null);
+                    } else {
+                        my.completeExceptionally(ar.cause());
+                    }
+                } finally {
+                    connecting.set(false);
+                    connectFuture = null;
+                }
+            });
+
+            // Wait up to connectTimeoutSeconds
+            my.orTimeout(Math.max(1, connectTimeoutSeconds), java.util.concurrent.TimeUnit.SECONDS).join();
+
+        } catch (Throwable t) {
+            connecting.set(false);
+            connectFuture = null;
+            throw new RuntimeException("MQTT connect failed", t);
+        }
+    }
+
+    @PreDestroy
+    void shutdown() {
+        try {
+            MqttClient c = client;
+            if (c != null && c.isConnected())
+                c.disconnect();
+        } catch (Throwable t) {
+            LOG.warn("Error disconnecting MQTT client", t);
+        }
+    }
+
+    private static int extractOrdinal(String n) {
+        if (n == null)
+            return 0;
+        try {
+            return Integer.parseInt(n.replaceAll(".*-(\\d+)$", "$1"));
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+}

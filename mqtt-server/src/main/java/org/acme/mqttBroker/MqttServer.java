@@ -45,9 +45,9 @@ public class MqttServer {
 
     @Startup(10)
     public void start() {
-        LOGGER.info("Initializing MQTT Broker...");
         if (mqttBroker != null) {
-            LOGGER.info("MQTT Broker already started");
+            if (LOGGER.isDebugEnabled())
+                LOGGER.debug("MQTT Broker already started");
             return;
         }
 
@@ -72,8 +72,6 @@ public class MqttServer {
 
         // --- Persistence ---
         if (usePersistentStore) {
-            // If you enable this, point to a file. Disk adds latency—prefer memory when
-            // possible.
             // props.setProperty(BrokerConstants.PERSISTENT_STORE_PROPERTY_NAME,
             // "mqtt_store.mapdb");
         } else {
@@ -83,10 +81,12 @@ public class MqttServer {
 
         try {
             mqttBroker.startServer(new MemoryConfig(props));
-            if (wsEnabled) {
-                LOGGER.infof("MQTT Broker started on tcp/%d and ws/%d (host=%s)", mqttPort, wsPort, host);
-            } else {
-                LOGGER.infof("MQTT Broker started on tcp/%d (host=%s). WebSocket disabled.", mqttPort, host);
+            if (LOGGER.isDebugEnabled()) {
+                if (wsEnabled) {
+                    LOGGER.debugf("MQTT Broker started on tcp/%d and ws/%d (host=%s)", mqttPort, wsPort, host);
+                } else {
+                    LOGGER.debugf("MQTT Broker started on tcp/%d (host=%s). WebSocket disabled.", mqttPort, host);
+                }
             }
         } catch (IOException e) {
             LOGGER.error("Failed to start MQTT Broker", e);
@@ -95,10 +95,12 @@ public class MqttServer {
 
     @PreDestroy
     public void stop() {
-        LOGGER.info("Stopping MQTT Broker...");
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Stopping MQTT Broker...");
         if (mqttBroker != null) {
             mqttBroker.stopServer();
-            LOGGER.info("MQTT Broker stopped");
+            if (LOGGER.isDebugEnabled())
+                LOGGER.debug("MQTT Broker stopped");
         }
     }
 }
