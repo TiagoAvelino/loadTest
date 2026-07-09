@@ -1,0 +1,25 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mqtt-server-ws
+  namespace: kafka
+  labels:
+    app.kubernetes.io/name: mqtt-server
+  annotations:
+    # Enable WebSocket support with long timeout
+    haproxy.router.openshift.io/timeout: 3600s
+    # Allow WebSocket upgrades
+    haproxy.router.openshift.io/balance: source
+spec:
+  # Host will be auto-generated if not specified, or set your custom host
+  # host: mqtt-server.apps.your-cluster.example.com
+  to:
+    kind: Service
+    name: mqtt-server-headless
+    weight: 100
+  port:
+    targetPort: mqtt-ws
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+

@@ -16,7 +16,7 @@ public class KafkaMessageConsumer {
 
     private static final Logger LOGGER = Logger.getLogger(KafkaMessageConsumer.class.getName());
 
-    @Incoming("app.test.pull")
+    @Incoming("monitor.state.pull.value")
     public MqttSendMessage consumeMessages(ConsumerRecord<String, MqttSendMessage> record) {
         final String key = record.key();
         final String topic = record.topic();

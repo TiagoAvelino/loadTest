@@ -1,6 +1,6 @@
 package org.acme.kafka;
 
-import org.acme.mqtt.MqttSendMessage;
+import org.acme.tracing.messageparams.MqttSendMessage;
 import io.quarkus.kafka.client.serialization.ObjectMapperSerde;
 import org.apache.kafka.common.serialization.Serde;
 

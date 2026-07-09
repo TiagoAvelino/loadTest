@@ -28,12 +28,11 @@ public class MqttServer {
     int mqttPort;
 
     // Toggle WebSocket listener entirely (disable if unused for lower latency)
-    @ConfigProperty(name = "mqtt.broker.ws.enabled", defaultValue = "false")
+    @ConfigProperty(name = "mqtt.broker.ws.enabled", defaultValue = "true")
     boolean wsEnabled;
 
     @ConfigProperty(name = "mqtt.broker.ws.port", defaultValue = "8090")
     int wsPort;
-
     // Auth
     @ConfigProperty(name = "mqtt.broker.allowAnonymous", defaultValue = "true")
     boolean allowAnonymous;

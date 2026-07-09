@@ -73,6 +73,11 @@ spec:
               value: 'http://dev-collector.openshift-tempo-operator.svc.cluster.local:4317'
             - name: JAVA_APP_JAR
               value: /deployments/mqtt-server-1.0.0-SNAPSHOT-runner.jar
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
           volumeMounts:
             - name: truststore
               mountPath: /mnt/truststore

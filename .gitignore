@@ -1,1 +1,8 @@
+# k6 operator downloaded artifacts
 k6-operator/*
+
+# Node.js
+node_modules/
+
+# Maven build output
+target/

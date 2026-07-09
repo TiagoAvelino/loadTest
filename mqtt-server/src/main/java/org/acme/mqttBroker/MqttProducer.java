@@ -37,7 +37,7 @@ public class MqttProducer {
 
     private IMqttClient client;
 
-    @ConfigProperty(name = "mqtt.url", defaultValue = "tcp://localhost:1883")
+    @ConfigProperty(name = "mqtt.url", defaultValue = "wss://localhost:8090")
     String broker;
 
     private volatile boolean connecting;

@@ -58,7 +58,7 @@ public class KafkaMessageConsumer {
         }
     };
 
-    @Incoming("app.test.push")
+    @Incoming("monitor.state.push.value")
     public void consume(ConsumerRecord<String, MqttSendMessage> record) {
         final String key = record.key();
         final String topic = record.topic();
@@ -97,7 +97,7 @@ public class KafkaMessageConsumer {
         var receiveSpan = recvBuilder
                 .setAttribute("messaging.kafka.partition", record.partition())
                 .setAttribute("messaging.kafka.offset", record.offset())
-                .setAttribute("messaging.kafka.consumer_group", "app.test.push")
+                .setAttribute("messaging.kafka.consumer_group", "monitor.state.push.value")
                 .setAttribute("messaging.message_payload_size_bytes",
                         record.value() == null ? 0 : record.value().serialize().length)
                 .startSpan();
@@ -137,7 +137,7 @@ public class KafkaMessageConsumer {
         final String key = record.key();
 
         try {
-            pauseConsumer("app.test.push");
+            pauseConsumer("monitor.state.push.value");
 
             MqttSendMessage message = record.value();
             if (message == null) {
@@ -152,9 +152,9 @@ public class KafkaMessageConsumer {
             // Compute the MQTT topic you want to propagate
             String mqttTopic = String.format(mqttTopicPattern, key, record.topic()).replace(".", "/");
 
-            // Choose the Kafka topic you’re sending to (you had host there; keep if
+            // Choose the Kafka topic you're sending to (you had host there; keep if
             // intended)
-            String kafkaTopic = record.value().getHost();
+            String kafkaTopic = message.getHost();
 
             if (tracingEnabled) {
                 var produceSpan = TracingBridge
@@ -187,7 +187,7 @@ public class KafkaMessageConsumer {
             System.err.println("Erro ao processar mensagem Kafka:");
             e.printStackTrace();
         } finally {
-            resumeConsumer("app.test.push");
+            resumeConsumer("monitor.state.push.value");
         }
     }
 

@@ -57,7 +57,7 @@ public class MqttConsumer {
     @ConfigProperty(name = "SERVICE")
     String service;
 
-    @ConfigProperty(name = "mqtt.consumer.topic", defaultValue = "mqtt-message-in/1/2/app/test/push")
+    @ConfigProperty(name = "mqtt.consumer.topic", defaultValue = "horus/api/200/external/MOV/+/+/monitor/state/push/value")
     String consumerTopic;
 
     @ConfigProperty(name = "mqtt.keepalive.seconds", defaultValue = "20")

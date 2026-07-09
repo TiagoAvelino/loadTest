@@ -62,10 +62,10 @@ public class MqttConsumerService {
     private ObjectReader mqttMessageReader;
 
     // ---- Runtime config (env-friendly) -----------------------------------------
-    @ConfigProperty(name = "mqtt.url", defaultValue = "tcp://localhost:1883")
+    @ConfigProperty(name = "mqtt.url", defaultValue = "tcp://localhost:8090")
     String mqttUrl;
 
-    @ConfigProperty(name = "mqtt.topic.filter", defaultValue = "mqtt-message-in/+/+/app/test/pull")
+    @ConfigProperty(name = "mqtt.topic.filter", defaultValue = "horus/api/200/external/MOV/+/+/monitor/state/pull/value")
     String topicFilter;
 
     @ConfigProperty(name = "mqtt.subscribe.qos", defaultValue = "0")
@@ -320,6 +320,10 @@ public class MqttConsumerService {
             LOGGER.infof("Message received content: %s", msg.getMessage());
         }
 
+        if (msg.getMessage() == null) {
+            msg.setMessage("simple-message-transformation");
+        }
+
         String key = transformKey(topic);
         String dest = transformTopic(topic);
         if (replacePullWithPush && dest.endsWith(".pull")) {
@@ -376,32 +380,35 @@ public class MqttConsumerService {
         }
     }
 
-    // ---- Split-less topic transforms (low GC) -----------------------------------
+    private static int indexOfNthSlash(String s, int n) {
+        int idx = -1;
+        while (n-- > 0) {
+            idx = s.indexOf('/', idx + 1);
+            if (idx < 0)
+                return -1;
+        }
+        return idx;
+    }
+
+    // For: horus/api/200/external/MOV/+/+/monitor/state/pull/value
+    // Cut after the 7th slash (horus..+/+)
+    private static final int KEY_SLASH_COUNT = 7;
+
     public static String transformKey(String mqttTopic) {
         Objects.requireNonNull(mqttTopic, "mqttTopic");
-        int first = mqttTopic.indexOf('/');
-        if (first < 0)
-            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
-        int second = mqttTopic.indexOf('/', first + 1);
-        if (second < 0)
-            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
-        int third = mqttTopic.indexOf('/', second + 1);
-        if (third < 0)
-            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
-        return mqttTopic.substring(0, third).replace('/', '.'); // e.g., mqtt-message-in.1.2
+        final int cut = indexOfNthSlash(mqttTopic, KEY_SLASH_COUNT);
+        if (cut < 0)
+            throw new IllegalArgumentException(
+                    "Invalid MQTT topic (need at least " + KEY_SLASH_COUNT + " slashes): " + mqttTopic);
+        return mqttTopic.substring(0, cut).replace('/', '.'); // horus.api.200.external.MOV.+.+
     }
 
     public static String transformTopic(String mqttTopic) {
         Objects.requireNonNull(mqttTopic, "mqttTopic");
-        int first = mqttTopic.indexOf('/');
-        if (first < 0)
-            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
-        int second = mqttTopic.indexOf('/', first + 1);
-        if (second < 0)
-            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
-        int third = mqttTopic.indexOf('/', second + 1);
-        if (third < 0)
-            throw new IllegalArgumentException("Invalid MQTT topic: " + mqttTopic);
-        return mqttTopic.substring(third + 1).replace('/', '.'); // e.g., app.test.pull
+        final int cut = indexOfNthSlash(mqttTopic, KEY_SLASH_COUNT);
+        if (cut < 0)
+            throw new IllegalArgumentException(
+                    "Invalid MQTT topic (need at least " + KEY_SLASH_COUNT + " slashes): " + mqttTopic);
+        return mqttTopic.substring(cut + 1).replace('/', '.'); // monitor.state.pull.value
     }
 }

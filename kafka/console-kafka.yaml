@@ -5,7 +5,7 @@ metadata:
   name: my-console
   namespace: kafka
 spec:
-  hostname: my-console.apps.tiago-cluster.sandbox5437.opentlc.com
+  hostname: my-console.apps.tiago-cluster.sandbox1923.opentlc.com
 
   kafkaClusters:
     - name: my-cluster

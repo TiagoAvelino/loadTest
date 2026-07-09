@@ -2,7 +2,7 @@ package org.acme.kafka;
 
 import java.time.Duration;
 
-import org.acme.mqtt.MqttSendMessage;
+import org.acme.tracing.messageparams.MqttSendMessage;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.StreamsBuilder;
